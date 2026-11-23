@@ -82,6 +82,31 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
         self.assertEqual(payload["event_kind"], "task_event")
 
+    async def test_long_gap_uses_fresh_appraisal_without_deleting_saved_history(self):
+        old = [{"role": "user", "content": "你真讨厌"}, {"role": "assistant", "content": "有点生气"}]
+        event = FakeEvent("a", "早上好")
+        self.plugin.clocks.moment("a")["last_user"] = 1000
+        request = ProviderRequest(prompt="早上好", contexts=old)
+        with patch("astrbot_plugin_short_term_mood.main.time.time", return_value=30000):
+            await self.plugin.apply_mood(event, request)
+            await self.plugin.apply_mood(event, request)
+        self.assertEqual(request.contexts, old)
+        self.assertEqual(sum(part.text.startswith("<astrbot_time_context>") for part in request.extra_user_content_parts), 1)
+        await self.settle()
+        payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
+        self.assertEqual(payload["time_context"]["gap_seconds"], 29000)
+        self.assertEqual(payload["recent_dialogue"], [])
+
+    async def test_codex_does_not_touch_real_conversation_clock(self):
+        self.plugin.clocks.moment("a")["last_user"] = 1000
+        event = FakeEvent("a", "任务完成")
+        event.set_extra("w1_event", {"type": "task_event", "is_user_message": False})
+        await self.plugin.apply_mood(event, ProviderRequest(prompt="任务完成"))
+        await self.plugin.finish_response(event, SimpleNamespace(completion_text="做好啦"))
+        self.assertEqual(self.plugin.clocks.moment("a")["last_user"], 1000)
+        self.assertEqual(self.plugin.clocks.moment("a")["last_reply"], 0)
+        await self.settle()
+
     async def test_different_conversations_and_personas_share_one_state(self):
         first, second = FakeEvent("wechat:private:a"), FakeEvent("qq:group:b")
         await self.plugin.apply_mood(first, ProviderRequest(prompt="你真讨厌"))

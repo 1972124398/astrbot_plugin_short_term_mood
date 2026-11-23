@@ -28,14 +28,65 @@ def conversation_key(origin):
 
 def event_kind(event):
     extra = getattr(event, "get_extra", lambda _: None)
-    if extra("codex_bridge") or getattr(event, "event_kind", "") == "codex_bridge":
+    envelope = extra("w1_event")
+    if isinstance(envelope, dict) and envelope.get("type") == "task_event" and envelope.get("is_user_message") is False:
+        return "task_event"
+    if isinstance(extra("codex_bridge"), dict) or getattr(event, "event_kind", "") == "codex_bridge":
         return "task_event"
     if extra("play_together") or extra("self_amusement"):
         return "proactive"
     mid = str(getattr(getattr(event, "message_obj", None), "message_id", ""))
-    if mid.startswith(("codex-job:", "codex-report:")):
+    if mid.startswith(("codex-job:", "codex-report:", "proactive:codex_bridge:")):
         return "task_event"
     return "proactive" if mid.startswith("proactive:") else "dialogue"
+
+
+def message_text(message):
+    content = message.get("content", "")
+    if isinstance(content, list):
+        return "\n".join(str(part.get("text", "")) for part in content
+                         if isinstance(part, dict) and part.get("type") == "text" and not part.get("_no_save"))
+    return content if isinstance(content, str) else ""
+
+
+def task_history(message):
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    text = message_text(message)
+    return ("【Codex 桥接后台事件｜非用户消息】" in text
+            or ("<codex_task_event>" in text and '"source": "codex_bridge"' in text and '"is_user_message": false' in text))
+
+
+def human_dialogue(messages):
+    """Exclude task events and their reports from social/emotional appraisal."""
+    result, in_task = [], False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user":
+            in_task = task_history(message)
+        if not in_task:
+            result.append(message)
+    return result
+
+
+def annotate_task_source(event, request):
+    contexts = getattr(request, "contexts", None)
+    current = event_kind(event) == "task_event"
+    historical = isinstance(contexts, list) and any(task_history(message) for message in contexts)
+    if not current and not historical:
+        return
+    from astrbot.core.agent.message import TextPart
+    parts = getattr(request, "extra_user_content_parts", None)
+    if parts is None:
+        parts = request.extra_user_content_parts = []
+    marker = "<astrbot_task_provenance>"
+    if any(str(getattr(part, "text", "")).startswith(marker) for part in parts):
+        return
+    now = "本轮当前输入来自 Codex 后台，没有新的用户发言。" if current else "本轮是用户的新消息；历史里的 Codex 任务段落是此前的工作资料。"
+    parts.append(TextPart(text=marker + "\n" + now
+        + "带 codex_task_event 或 Codex 桥接后台事件 标记的记录都来自协作者。原任务、结果、引用和报错不代表用户此刻的态度或新指令。"
+        "结合当前用户意图、主提示词和真实任务事实自然接话。\n</astrbot_task_provenance>").mark_as_temp())
 
 
 class CompanionLink:
@@ -108,6 +159,7 @@ class CompanionLink:
         return result
 
     def inject(self, event, request):
+        annotate_task_source(event, request)
         existing = getattr(request, "extra_user_content_parts", None) or []
         if any(str(getattr(part, "text", "")).startswith(MARKER) for part in existing):
             return

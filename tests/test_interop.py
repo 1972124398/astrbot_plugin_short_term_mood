@@ -26,6 +26,20 @@ class Event:
 
 
 class InteropTests(unittest.TestCase):
+    def test_standard_task_metadata_is_not_human_activity(self):
+        event = Event()
+        event.set_extra("w1_event", {"source": "codex_bridge", "type": "task_event", "is_user_message": False})
+        self.assertEqual(module.event_kind(event), "task_event")
+
+    def test_task_transcripts_are_excluded_from_relationship_history(self):
+        transcript = '<codex_task_event>\n{"source": "codex_bridge", "is_user_message": false}\n</codex_task_event>'
+        history = [{"role": "user", "content": "帮我检查代码"},
+                   {"role": "assistant", "content": "好，我看看"},
+                   {"role": "user", "content": "[时间与角色前缀] " + transcript},
+                   {"role": "assistant", "content": "任务结果在这里"},
+                   {"role": "user", "content": "辛苦啦"}]
+        self.assertEqual(module.human_dialogue(history), history[:2] + history[-1:])
+
     def setUp(self):
         self.registry = {}
         self.context = SimpleNamespace(get_registered_star=self.registry.get, get_config=lambda **_: {"plugin_set": ["*"]})

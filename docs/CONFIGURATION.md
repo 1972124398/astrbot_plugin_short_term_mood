@@ -42,3 +42,7 @@
 ## 拟人插件联动
 
 `interop_enabled` 默认开启，自动发现可用同伴；关闭后独立使用。前台只读取状态与排队，感受评估在后台完成。详见[四插件联动](LINKING.md)。
+
+## 现实时间感与旧话题
+
+`time_awareness` 默认开启。`context_fade_minutes` 默认 30 分钟，`context_set_aside_hours` 默认 6 小时，`time_preferences` 可写角色习惯。均可在配置窗口修改。原历史保留，新的情绪评估从本次交流接起；Codex 回报不会续期。详见[聊天里也有现实时间](TIME_CONTEXT.md)。

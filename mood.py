@@ -153,7 +153,20 @@ class MoodStore:
             "(id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL);"
             "CREATE TABLE IF NOT EXISTS profiles "
             "(key TEXT PRIMARY KEY, payload TEXT NOT NULL, created REAL NOT NULL);"
+            "CREATE TABLE IF NOT EXISTS conversation_clocks "
+            "(id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL);"
         )
+
+    def load_clocks(self) -> dict:
+        row = self.connection.execute("SELECT payload FROM conversation_clocks WHERE id = 1").fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_clocks(self, clocks: dict) -> None:
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO conversation_clocks VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (json.dumps(clocks, ensure_ascii=False, allow_nan=False),),
+            )
 
     def load(self) -> MoodState:
         row = self.connection.execute("SELECT payload FROM agent_state WHERE id = 1").fetchone()

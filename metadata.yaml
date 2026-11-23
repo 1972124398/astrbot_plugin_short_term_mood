@@ -1,7 +1,7 @@
 name: astrbot_plugin_short_term_mood
 display_name: 短期共享情绪
 desc: 让角色有玩心、小脾气和情绪余韵，跨对话共享心境，支持随性聊天、嘴硬心软与后台情绪变化。
-version: 0.5.0
+version: 0.6.0
 author: W1
 repo: https://github.com/1972124398/astrbot_plugin_short_term_mood
 astrbot_version: ">=4.29.4,<5"

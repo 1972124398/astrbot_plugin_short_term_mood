@@ -209,5 +209,39 @@
     "type": "bool",
     "default": true,
     "hint": "自动发现 Codex Bridge、陪它玩、自娱自乐和短期共享情绪。共享心境、当前会话的相处与活动背景；未安装的能力自动略过，单独安装也能使用。"
+  },
+  "time_awareness": {
+    "description": "像人一样感受现实中的聊天间隔",
+    "type": "bool",
+    "default": true,
+    "hint": "按当前群或私聊的真实交流时间淡化旧话题。Codex 后台回报和 AI 主动发言不算用户回来聊天。"
+  },
+  "context_fade_minutes": {
+    "description": "隔多久旧话题开始淡下来，单位分钟",
+    "type": "int",
+    "default": 30,
+    "slider": {
+      "min": 1,
+      "max": 10080,
+      "step": 1
+    },
+    "hint": "给模型真实经过的时间感，不再把较早的争执、玩笑和告别都当成刚发生。"
+  },
+  "context_set_aside_hours": {
+    "description": "隔多久可以先放下旧上下文，单位小时",
+    "type": "float",
+    "default": 6,
+    "slider": {
+      "min": 0.1,
+      "max": 720,
+      "step": 0.1
+    },
+    "hint": "默认 6 小时后像重新碰面一样，从眼前的话接起。旧段落不再反复触发后台情绪；用户想接着聊旧事时，模型仍可自然想起。原始历史保留。"
+  },
+  "time_preferences": {
+    "description": "它对时间间隔的小习惯",
+    "type": "text",
+    "default": "",
+    "hint": "例如：隔夜就不再纠结零碎小事，但仍记得熟悉的人和答应过的重要事情；用户想续聊时自然接上。"
   }
 }

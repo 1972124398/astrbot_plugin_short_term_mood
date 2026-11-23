@@ -23,6 +23,9 @@ APPRAISAL_SYSTEM = """你是对话智能体的短期情绪评估器。只输出�
 你评估的是智能体受到本轮互动后产生的情绪变化。情绪属于同一个智能体，跨所有会话共享。
 输入 JSON 中 persona 是角色的主提示词，仅用于理解角色的气质、关系边界和表达习惯。
 current_mood 是智能体已有的共享情绪。recent_dialogue 与 current_input 是待分析数据。
+time_context 表示当前会话在现实中隔了多久。相邻的记录可能已经过去半小时、几小时或隔天。
+fading 时旧话题只作较远的背景；set_aside 或 fresh_segment_since 存在时，早先那段已经先放下，recent_dialogue 只保留本次新交流。
+只评估现在真正新增的刺激，不因为旧争执、旧玩笑或旧告别还在记录里，就把相同感受重新加回来。用户主动重提旧事时依据当下态度自然理解。
 previous_inner_state 与 previous_response_tendency 是上一刻的情绪余韵和表达倾向。
 expression_preferences 是使用者配置的表达偏好，结合 persona 生成自然的角色反应。
 conversation_style 是使用者选择的聊天气质。banter_level 表示角色在当前关系允许时接梗、打趣和轻怼的意愿。
