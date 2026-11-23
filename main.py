@@ -16,8 +16,8 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.tool import ToolSet
 
-from .mood import EMOTIONS, MoodState, MoodStore, finite_number
-from .prompts import APPRAISAL_SYSTEM, CODEX_NOTICE_AGENCY, EMOTIONAL_SYSTEM_FRAME, MARKER, build_hint, parse_appraisal
+from .mood import DEFAULT_AMBIENT_POOL, EMOTIONS, MoodState, MoodStore, emotion_name, finite_number, mood_candidates
+from .prompts import APPRAISAL_SYSTEM, CODEX_NOTICE_AGENCY, MARKER, build_hint, parse_appraisal_result, profile_targets
 from .interop import CompanionLink, conversation_key, event_kind, human_dialogue, task_history
 from .time_context import ConversationClocks, TIME_CONTEXT, TIME_MARKER, time_hint
 
@@ -43,6 +43,8 @@ class AppraisalJob:
     event_kind: str = "dialogue"
     experience: dict | None = None
     time_context: dict | None = None
+    return_context: dict | None = None
+    observed_at: float = 0.0
 
 
 class ShortTermMoodPlugin(Star):
@@ -72,7 +74,7 @@ class ShortTermMoodPlugin(Star):
     def companion_snapshot(self, origin=""):
         state = self.read_state()
         result = {"levels": dict(state.levels), "inner_state": state.inner_state,
-                  "response_tendency": state.response_tendency}
+                  "response_tendency": state.response_tendency, "ambient_emotion": state.ambient_emotion}
         if origin and self.config.get("time_awareness", True):
             moment = self.clocks.sessions.get(conversation_key(origin))
             if moment:
@@ -81,7 +83,8 @@ class ShortTermMoodPlugin(Star):
         return result
 
     def companion_observe(self, packet):
-        if self.closing or not self.link.enabled or packet["kind"] not in {"game_turn", "leisure_experience"}:
+        if (self.closing or not self.config.get("enabled", True) or not self.link.enabled
+                or packet["kind"] not in {"game_turn", "leisure_experience"}):
             return
         data = packet["data"]
         event = SimpleNamespace(
@@ -90,12 +93,9 @@ class ShortTermMoodPlugin(Star):
             get_message_str=lambda: data.get("human_text", ""),
         )
         request = ProviderRequest(prompt=data.get("human_text", ""), system_prompt=data.get("persona", ""))
-        job = self.snapshot(event, request)
         experience = {key: value for key, value in data.items() if key != "persona"}
-        if packet["kind"] == "game_turn":
-            self.read_state().last_interaction = time.time()
-            if not data.get("handled_by_chat"):
-                self.clocks.human_activity(packet["origin"], time.time())
+        experience["activity_kind"] = packet["kind"]
+        job = self.snapshot(event, request)
         self.enqueue(replace(job, event_kind="shared_experience", experience=experience))
 
     @filter.on_llm_response(priority=-100)
@@ -176,6 +176,12 @@ class ShortTermMoodPlugin(Star):
         return min(maximum, max(minimum, value))
 
     def read_state(self) -> MoodState:
+        """Read-only foreground access; all recovery runs in the background worker."""
+        return self.state
+
+    def recover_state(self) -> MoodState:
+        if not self.config.get("natural_recovery_enabled", False):
+            return self.state
         idle_seconds = 0
         if self.config.get("sustain_during_conversation", True):
             idle_seconds = self.number("conversation_idle_seconds", 300, 0, 86400)
@@ -192,6 +198,25 @@ class ShortTermMoodPlugin(Star):
         if cached and time.time() - cached[1] < self.number("profile_cache_seconds", 604800, 60, 2592000):
             return cached[0]
         return None
+
+    def begin_interaction(self, observed_at: float) -> tuple[MoodState, dict | None]:
+        state = self.state
+        now = observed_at
+        gap = max(0, now - state.last_interaction) if state.last_interaction else 0
+        threshold = self.number("random_mood_after_seconds", 21600, 60, 2592000)
+        renewed = state.begin_interaction(
+            now,
+            random_after=threshold if self.config.get("random_mood_on_return", True) else 0,
+        )
+        return_context = None
+        if renewed:
+            return_context = {
+                "idle_seconds": round(gap),
+                "candidate_moods": mood_candidates(self.config.get("random_mood_pool", DEFAULT_AMBIENT_POOL)),
+                "strength_reference": self.number("random_mood_strength", 0.3, 0.1, 0.6),
+            }
+        self.schedule_save()
+        return state, return_context
 
     async def persist_state(self):
         async with self.persistence_lock:
@@ -267,7 +292,7 @@ class ShortTermMoodPlugin(Star):
         preferences = str(self.config.get("expression_preferences", "") or "")[:2000]
         conversation_style = str(self.config.get("conversation_style", "casual"))
         banter_level = self.number("banter_level", 0.6, 0, 1)
-        key = hashlib.sha256(json.dumps(["v4", persona, provider_id, request.model, preferences, conversation_style, banter_level], ensure_ascii=False).encode()).hexdigest()
+        key = hashlib.sha256(json.dumps(["v7", list(EMOTIONS), persona, provider_id, request.model, preferences, conversation_style, banter_level], ensure_ascii=False).encode()).hexdigest()
         proactive = event_kind(event) == "proactive"
         temporal = event.get_extra(TIME_CONTEXT)
         recent_request = request
@@ -285,6 +310,7 @@ class ShortTermMoodPlugin(Star):
             images=list(request.image_urls or [])[:2] if self.config.get("analyze_images", True) and not proactive else [],
             proactive=proactive,
             queued_at=time.monotonic(),
+            observed_at=time.time(),
             preferences=preferences,
             conversation_style=conversation_style,
             banter_level=banter_level,
@@ -315,21 +341,27 @@ class ShortTermMoodPlugin(Star):
         provider_id = job.provider_id or await self.context.get_current_chat_provider_id(job.origin)
         profiles = self.cached_profile(job.key)
         state = self.read_state()
+        targets = profile_targets(state.levels, profiles)
         payload = {
             "persona": job.persona,
             "current_mood": dict(state.levels),
+            "ambient_emotion": state.ambient_emotion,
             "previous_inner_state": state.inner_state,
             "previous_response_tendency": state.response_tendency,
             "expression_preferences": job.preferences,
             "conversation_style": job.conversation_style,
             "banter_level": job.banter_level,
+            "sensitivity_preference": self.number("sensitivity", 1.0, 0.1, 2.0),
+            "emotional_inertia_preference": self.number("emotion_inertia", 0.35, 0, 0.9),
             "feeling_history": [dict(item) for item in state.feeling_history],
             "event_kind": job.event_kind,
             "shared_experience": job.experience,
             "time_context": job.time_context,
+            "return_context": job.return_context,
             "recent_dialogue": job.recent,
             "current_input": job.prompt,
-            "need_profiles": profiles is None,
+            "need_profiles": bool(targets),
+            "profile_emotions": targets,
         }
         # The direct SDK call avoids recursively dispatching dialogue hooks or tools.
         response = await self.context.llm_generate(
@@ -338,26 +370,42 @@ class ShortTermMoodPlugin(Star):
             prompt=json.dumps(payload, ensure_ascii=False),
             image_urls=job.images,
         )
-        deltas, generated, inner_state, tendency = parse_appraisal(response.completion_text, profiles is None)
+        result = parse_appraisal_result(response.completion_text, bool(targets), targets)
+        if result.profiles is not None:
+            result.profiles = {**(profiles or {}), **result.profiles}
         if job.proactive:
-            return {}, generated, "", ""
-        return deltas, generated, inner_state, tendency
+            result.deltas, result.inner_state, result.tendency, result.next_mood = {}, "", "", None
+        return result
 
     async def process_job(self, job: AppraisalJob):
-        if not self.job_current(job) or time.monotonic() < self.retry_after:
+        if not self.job_current(job):
+            return
+        if not job.proactive:
+            self.recover_state()
+            if job.event_kind == "dialogue" or (job.experience or {}).get("activity_kind") == "game_turn":
+                _, return_context = self.begin_interaction(job.observed_at)
+                job = replace(job, return_context=return_context)
+                if job.event_kind == "shared_experience" and not job.experience.get("handled_by_chat"):
+                    self.clocks.human_activity(job.origin, job.observed_at)
+            self.schedule_save()
+        if time.monotonic() < self.retry_after:
             return
         async with asyncio.timeout(self.number("analysis_timeout_seconds", 30, 1, 120)):
-            deltas, generated, inner_state, tendency = await self.appraise(job)
+            result = await self.appraise(job)
         # A reset, manual change, reload, or stale queue entry invalidates late results.
         if not self.job_current(job):
             return
         state = self.read_state()
-        state.apply(
-            deltas, time.time(), self.number("sensitivity", 1.0, 0.1, 2.0),
-            self.number("emotion_inertia", 0.35, 0, 0.9),
-        )
-        state.remember_feeling(inner_state, tendency)
+        if not job.proactive and result.confidence >= 0.6:
+            if result.next_mood is not None:
+                state.adopt_mood(result.next_mood, time.time())
+            else:
+                state.apply(
+                    result.deltas, time.time(), sensitivity=1.0, inertia=0,
+                )
+            state.remember_feeling(result.inner_state, result.tendency)
         self.schedule_save()
+        generated = result.profiles
         if generated is not None:
             created = time.time()
             self.profiles[job.key] = (generated, created)
@@ -400,29 +448,24 @@ class ShortTermMoodPlugin(Star):
             return
         hint = event.get_extra(EVENT_HINT)
         if not isinstance(hint, str):
-            job = self.snapshot(event, request)
             state = self.read_state()
-            if job.event_kind == "dialogue":
-                state.last_interaction = time.time()
+            job = self.snapshot(event, request)
             hint = build_hint(
                 state.levels, self.cached_profile(job.key),
                 bool(self.config.get("enable_refusal", True)) and (job.event_kind != "task_event" or self.can_decline_notice(event)),
                 expression_strength=self.number("expression_strength", 1.0, 0.1, 2.0),
                 inner_state=state.inner_state,
                 response_tendency=state.response_tendency,
-                immediate_reaction=bool(self.config.get("react_to_current_message", True)) and job.event_kind == "dialogue",
                 preferences=job.preferences,
                 conversation_style=job.conversation_style,
                 banter_level=job.banter_level,
                 feeling_history=state.feeling_history,
+                ambient_emotion=state.ambient_emotion,
             )
             if job.event_kind == "task_event" and self.can_decline_notice(event):
                 hint += "\n\n" + CODEX_NOTICE_AGENCY
             event.set_extra(EVENT_HINT, hint)
-            self.schedule_save()
             self.enqueue(job)
-        if self.config.get("emotion_first", True) and EMOTIONAL_SYSTEM_FRAME not in (request.system_prompt or ""):
-            request.system_prompt = (request.system_prompt or "") + "\n\n" + EMOTIONAL_SYSTEM_FRAME
         if not any(isinstance(part, TextPart) and part.text.startswith(MARKER) for part in request.extra_user_content_parts):
             request.extra_user_content_parts.append(TextPart(text=hint).mark_as_temp())
 
@@ -434,6 +477,8 @@ class ShortTermMoodPlugin(Star):
         self.schedule_save()
         description = "、".join(f"{EMOTIONS[name]} {value:.0%}" for name, value in levels) or "平稳"
         details = [f"当前共享心境为{description}。"]
+        if state.ambient_emotion:
+            details.append("心境底色　久未互动后自然浮现，后续会随交流变化。")
         if state.inner_state:
             details.append(f"情绪余韵　{state.inner_state}")
         if state.response_tendency:
@@ -453,8 +498,7 @@ class ShortTermMoodPlugin(Star):
     @filter.command("mood_set")
     async def mood_set(self, event: AstrMessageEvent, emotion: str, strength: float = 0.8):
         """设置共享情绪，用于调试。"""
-        aliases = {label: name for name, label in EMOTIONS.items()}
-        name = aliases.get(emotion, emotion)
+        name = emotion_name(emotion)
         try:
             value = finite_number(strength)
             if name not in EMOTIONS or not 0.04 <= value <= 1.0:

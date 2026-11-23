@@ -6,11 +6,148 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_short_term_mood.mood import EMOTIONS, MoodState, MoodStore
-from astrbot_plugin_short_term_mood.prompts import build_hint, parse_appraisal
+from astrbot_plugin_short_term_mood.mood import DEFAULT_AMBIENT_POOL, EMOTIONS, MoodState, MoodStore, emotion_name, mood_candidates
+from astrbot_plugin_short_term_mood.prompts import APPRAISAL_SYSTEM, EXPRESSION_GUIDES, build_hint, parse_appraisal, profile_targets
 
 
 class MoodTests(unittest.TestCase):
+    def test_all_new_emotions_can_be_appraised_and_persisted(self):
+        names = {"playfulness", "mischief", "confusion", "boredom", "surprise", "irritability",
+                 "anticipation", "longing", "relief", "contentment", "hesitation", "jealousy",
+                 "frustration", "guilt", "gratitude", "admiration", "determination", "tenderness",
+                 "amusement", "sulking", "absorption", "nostalgia", "skepticism", "exasperation",
+                 "competitiveness", "awkwardness"}
+        profiles = {name: "按角色自然表达" for name in {"neutral", *EMOTIONS}}
+        payload = {"deltas": dict.fromkeys(names, 0.2), "confidence": 0.9, "profiles": profiles}
+        deltas, generated, _, _ = parse_appraisal(json.dumps(payload), True)
+        state = MoodState(updated=100)
+        state.apply(deltas, 100, 1)
+        with tempfile.TemporaryDirectory() as directory:
+            store = MoodStore(Path(directory) / "mood.sqlite3")
+            store.save(state)
+            self.assertEqual(set(store.load().levels), names)
+            store.close()
+        self.assertEqual(generated, profiles)
+
+    def test_every_emotion_has_immediate_guidance_and_an_appraisal_key(self):
+        self.assertEqual(set(EXPRESSION_GUIDES), set(EMOTIONS))
+        self.assertEqual(len(EMOTIONS), 36)
+        self.assertIn("/".join(EMOTIONS), APPRAISAL_SYSTEM)
+        self.assertNotIn("$EMOTION_", APPRAISAL_SYSTEM)
+        for name in EMOTIONS:
+            with self.subTest(emotion=name):
+                self.assertIn(EXPRESSION_GUIDES[name], build_hint({name: 0.4}, None, True))
+
+    def test_common_emotion_aliases_work_in_the_random_pool(self):
+        for text, expected in {" 放松 ": "contentment", "思念": "longing", "犯迷糊": "confusion",
+                               "不服气": "determination", "纠结": "hesitation", "LONGING": "longing"}.items():
+            with self.subTest(alias=text):
+                self.assertEqual(emotion_name(text), expected)
+                self.assertEqual(mood_candidates([text]), [expected])
+        for invalid in (None, {}, 1, "unknown"):
+            self.assertIsNone(emotion_name(invalid))
+
+    def test_profiles_are_batched_with_current_mood_first_and_eventually_complete(self):
+        levels = {"tenderness": 0.7, "jealousy": 0.2}
+        profiles = {}
+        targets = profile_targets(levels, profiles)
+        self.assertEqual(targets[:3], ["neutral", "tenderness", "jealousy"])
+        seen = []
+        while targets:
+            self.assertLessEqual(len(targets), 8)
+            seen.extend(targets)
+            profiles.update(dict.fromkeys(targets, "已生成人格表达"))
+            targets = profile_targets(levels, profiles)
+        self.assertEqual(set(seen), {"neutral", *EMOTIONS})
+        self.assertEqual(len(seen), len(set(seen)))
+
+    def test_batched_profile_parser_keeps_deltas_for_emotions_outside_batch(self):
+        payload = {"deltas": {"tenderness": 0.2}, "confidence": 0.9,
+                   "profiles": {"neutral": "自然聊天", "joy": "角色高兴时的语气"}}
+        deltas, profiles, _, _ = parse_appraisal(json.dumps(payload), True, ["neutral", "joy"])
+        self.assertEqual(deltas, {"tenderness": 0.2})
+        self.assertEqual(set(profiles), {"neutral", "joy"})
+        with self.assertRaises(ValueError):
+            parse_appraisal(json.dumps(payload), True)
+        with self.assertRaises(ValueError):
+            parse_appraisal(json.dumps(payload), True, ["neutral", "joy", "tenderness"])
+        payload["profiles"]["unknown"] = "不允许的键"
+        with self.assertRaises(ValueError):
+            parse_appraisal(json.dumps(payload), True, ["neutral", "joy"])
+
+    def test_mixed_feelings_shape_expression_without_forcing_faint_undertones(self):
+        hint = build_hint({"anger": 0.7, "tenderness": 0.3}, None, True,
+                          inner_state="还有气但已经心软", response_tendency="想先听听，也可以给个台阶")
+        self.assertIn("还有气但已经心软", hint)
+        self.assertIn("想先听听，也可以给个台阶", hint)
+        self.assertNotIn("混合心境的一种自然表现", hint)
+
+    def test_positive_mixed_undertones_do_not_prevent_soothing_real_conflict(self):
+        state = MoodState({"anger": 0.6, "grievance": 0.4}, {"anger": 100, "grievance": 100}, updated=100)
+        state.apply({"anger": -0.2, "grievance": -0.15, "tenderness": 0.2, "relief": 0.15}, 101, 1, inertia=0.35)
+        self.assertLess(state.levels["anger"], 0.6)
+        self.assertLess(state.levels["grievance"], 0.4)
+        self.assertGreater(state.levels["tenderness"], 0)
+        self.assertIn("心软 0.", build_hint(state.levels, None, True))
+
+    def test_random_return_starts_at_threshold_and_only_once(self):
+        state = MoodState(updated=100, last_interaction=100)
+        self.assertTrue(state.begin_interaction(3700, random_after=3600))
+        self.assertEqual(state.levels, {})
+        self.assertFalse(state.begin_interaction(3701, random_after=3600))
+
+    def test_random_return_respects_first_use_disabled_recent_and_clock_rollback(self):
+        for previous, now, threshold in [(0, 9000, 3600), (100, 9000, 0), (100, 3699, 3600), (100, 90, 3600)]:
+            with self.subTest(previous=previous, now=now, threshold=threshold):
+                state = MoodState(last_interaction=previous)
+                self.assertFalse(state.begin_interaction(now, random_after=threshold))
+                self.assertEqual(state.levels, {})
+                self.assertEqual(state.last_interaction, max(previous, now))
+
+    def test_remaining_affect_is_not_overwritten_by_random_return(self):
+        state = MoodState({"anger": 0.8}, {"anger": 100}, updated=100, last_interaction=100)
+        self.assertTrue(state.begin_interaction(9000, random_after=3600))
+        self.assertEqual(state.levels, {"anger": 0.8})
+
+    def test_return_opportunity_keeps_neutral_until_model_decides(self):
+        state = MoodState(last_interaction=100)
+        self.assertTrue(state.begin_interaction(9000, random_after=3600))
+        self.assertEqual(state.levels, {})
+        self.assertFalse(state.begin_interaction(9001, random_after=3600))
+
+    def test_random_pool_accepts_chinese_names_and_ignores_duplicates_and_invalid_items(self):
+        self.assertEqual(mood_candidates(["恶作剧", "mischief", "无效", {}, 1]), ["mischief"])
+        for invalid in ([], ["无效"], "joy", None):
+            self.assertEqual(mood_candidates(invalid), list(DEFAULT_AMBIENT_POOL))
+
+    def test_random_source_survives_restart_and_clears_when_soothed_or_expired(self):
+        state = MoodState({"irritability": 0.25}, {"irritability": 9000}, updated=9000,
+                          last_interaction=9000, ambient_emotion="irritability")
+        with tempfile.TemporaryDirectory() as directory:
+            store = MoodStore(Path(directory) / "mood.sqlite3")
+            store.save(state)
+            state = store.load()
+            store.close()
+        self.assertEqual((state.ambient_emotion, state.last_interaction), ("irritability", 9000))
+        reloaded = MoodState.from_dict(state.as_dict())
+        stimulated = MoodState.from_dict(state.as_dict())
+        stimulated.apply({"irritability": 0.1}, 9001, 1)
+        self.assertEqual(stimulated.ambient_emotion, "")
+        state.apply({"irritability": -0.35, "affection": 0.2}, 9001, 1)
+        self.assertEqual(state.ambient_emotion, "")
+        reloaded.recover(12000, 300, 1200)
+        self.assertEqual(reloaded.ambient_emotion, "")
+
+    def test_new_emotions_have_immediate_distinct_guidance_without_cached_profiles(self):
+        for emotion, phrase in {"playfulness": "抛梗", "mischief": "揭梗", "confusion": "自己改口",
+                                "boredom": "重新吸引", "surprise": "消化新信息", "irritability": "耐心少一点"}.items():
+            with self.subTest(emotion=emotion):
+                hint = build_hint({emotion: 0.3}, None, True)
+                self.assertIn(phrase, hint)
+                self.assertIn("具体缘由只取自当前会话", hint)
+        hint = build_hint({"irritability": 0.3}, None, True, ambient_emotion="irritability")
+        self.assertIn("无来由的坏心情不等于用户做错了什么", hint)
+
     def test_recovery_includes_time_offline_and_has_a_hard_expiry(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "mood.sqlite3"
@@ -122,16 +259,16 @@ class MoodTests(unittest.TestCase):
             self.assertIsNone(store.profile("104", 1200))
             store.close()
 
-    def test_mixed_emotion_prompt_selects_three_and_restores_neutral(self):
+    def test_mixed_emotion_prompt_preserves_model_selected_feelings_and_neutral(self):
         hint = build_hint({"joy": 0.2, "anger": 0.9, "sadness": 0.5, "fatigue": 0.6}, None, True)
         self.assertIn("生气", hint)
-        self.assertNotIn("开心，表达强度", hint)
-        self.assertIn("直接拒绝", hint)
-        self.assertIn("心境已恢复平稳", build_hint({}, None, False))
+        self.assertIn("开心 0.", hint)
+        self.assertIn("不想聊时", hint)
+        self.assertIn("平静随性地聊", build_hint({}, None, False))
 
     def test_current_message_reacts_immediately_and_preferences_shape_expression(self):
         hint = build_hint({}, None, True, preferences="少写动作描写，生气时直说")
-        self.assertIn("当前消息发生的新刺激可以立即引起情绪反应", hint)
+        self.assertNotIn("当前消息发生的新刺激", hint)
         self.assertIn("生气时直说", hint)
         self.assertIn("害羞", str(EMOTIONS))
 
@@ -157,10 +294,10 @@ class MoodTests(unittest.TestCase):
         hint = build_hint({"affection": 0.4, "grievance": 0.3}, None, True,
                           conversation_style="lively", banter_level=0.8,
                           feeling_history=[{"feeling": "本来挺高兴"}, {"feeling": "有点别扭"}])
-        self.assertIn("雀跃、接梗", hint)
-        self.assertIn("想靠近又有点别扭", hint)
-        self.assertIn("本来挺高兴", hint)
-        self.assertIn("0.80", hint)
+        self.assertIn("表达可以活泼些", hint)
+        self.assertIn("亲近 0.40", hint)
+        self.assertNotIn("本来挺高兴", hint)
+        self.assertNotIn("评估模型", hint)
 
 
 if __name__ == "__main__":
