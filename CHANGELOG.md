@@ -1,5 +1,7 @@
 # 更新记录
 
+[返回首页](README.md) · [发布版本](https://github.com/1972124398/astrbot_plugin_short_term_mood/releases)
+
 ## 0.4.1
 
 - 首页集中展示聊天效果、快速开始、常用配置与命令。

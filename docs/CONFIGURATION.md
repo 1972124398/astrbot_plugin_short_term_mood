@@ -1,5 +1,7 @@
 # 配置参考
 
+[返回首页](../README.md) · [兼容与排错](COMPATIBILITY.md) · [工作方式与开发验证](DEVELOPMENT.md) · [更新记录](../CHANGELOG.md)
+
 ## 配置窗口
 
 安装或更新后，在 **AstrBot WebUI → 插件 → 短期共享情绪 → 配置** 打开原生配置窗口。仓库根目录的 `_conf_schema.json` 为该窗口提供中文名称、说明、滑块和模型选择器。修改后点击窗口中的保存按钮，配置按 AstrBot 的插件配置流程生效。

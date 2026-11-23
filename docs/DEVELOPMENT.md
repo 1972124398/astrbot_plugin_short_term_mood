@@ -1,5 +1,7 @@
 # 工作方式与开发验证
 
+[返回首页](../README.md) · [兼容与排错](COMPATIBILITY.md) · [配置参考](CONFIGURATION.md) · [更新记录](../CHANGELOG.md)
+
 ## 工作方式
 
 1. 当前请求准备完成后，前台立即读取共享心境、情绪余韵、互动倾向和人格表达，以临时 `TextPart(...).mark_as_temp()` 加到 `extra_user_content_parts`。当前消息里的赞赏、挑衅、玩笑或关心，也可以在这一轮即时引起表达上的反应。
