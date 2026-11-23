@@ -14,7 +14,7 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
 
 from .mood import EMOTIONS, MoodState, MoodStore, finite_number
-from .prompts import APPRAISAL_SYSTEM, MARKER, build_hint, parse_appraisal
+from .prompts import APPRAISAL_SYSTEM, EMOTIONAL_SYSTEM_FRAME, MARKER, build_hint, parse_appraisal
 
 
 EVENT_HINT = "astrbot_short_term_mood.hint"
@@ -33,6 +33,8 @@ class AppraisalJob:
     proactive: bool
     queued_at: float
     preferences: str
+    conversation_style: str
+    banter_level: float
 
 
 class ShortTermMoodPlugin(Star):
@@ -152,7 +154,9 @@ class ShortTermMoodPlugin(Star):
         persona = self.persona_prompt(event, request)
         provider_id = str(self.config.get("analysis_provider_id", "") or "").strip()
         preferences = str(self.config.get("expression_preferences", "") or "")[:2000]
-        key = hashlib.sha256(json.dumps(["v3", persona, provider_id, request.model, preferences], ensure_ascii=False).encode()).hexdigest()
+        conversation_style = str(self.config.get("conversation_style", "casual"))
+        banter_level = self.number("banter_level", 0.6, 0, 1)
+        key = hashlib.sha256(json.dumps(["v4", persona, provider_id, request.model, preferences, conversation_style, banter_level], ensure_ascii=False).encode()).hexdigest()
         message_id = getattr(getattr(event, "message_obj", None), "message_id", "")
         proactive = str(message_id).startswith("proactive:")
         return AppraisalJob(
@@ -167,6 +171,8 @@ class ShortTermMoodPlugin(Star):
             proactive=proactive,
             queued_at=time.monotonic(),
             preferences=preferences,
+            conversation_style=conversation_style,
+            banter_level=banter_level,
         )
 
     def enqueue(self, job: AppraisalJob):
@@ -198,6 +204,9 @@ class ShortTermMoodPlugin(Star):
             "previous_inner_state": state.inner_state,
             "previous_response_tendency": state.response_tendency,
             "expression_preferences": job.preferences,
+            "conversation_style": job.conversation_style,
+            "banter_level": job.banter_level,
+            "feeling_history": [dict(item) for item in state.feeling_history],
             "event_kind": "proactive" if job.proactive else "dialogue",
             "recent_dialogue": job.recent,
             "current_input": job.prompt,
@@ -218,7 +227,7 @@ class ShortTermMoodPlugin(Star):
     async def process_job(self, job: AppraisalJob):
         if not self.job_current(job) or time.monotonic() < self.retry_after:
             return
-        async with asyncio.timeout(self.number("analysis_timeout_seconds", 15, 1, 120)):
+        async with asyncio.timeout(self.number("analysis_timeout_seconds", 30, 1, 120)):
             deltas, generated, inner_state, tendency = await self.appraise(job)
         # A reset, manual change, reload, or stale queue entry invalidates late results.
         if not self.job_current(job):
@@ -228,12 +237,7 @@ class ShortTermMoodPlugin(Star):
             deltas, time.time(), self.number("sensitivity", 1.0, 0.1, 2.0),
             self.number("emotion_inertia", 0.35, 0, 0.9),
         )
-        if state.levels:
-            state.inner_state = inner_state or state.inner_state
-            state.response_tendency = tendency or state.response_tendency
-        else:
-            state.inner_state = ""
-            state.response_tendency = ""
+        state.remember_feeling(inner_state, tendency)
         self.schedule_save()
         if generated is not None:
             created = time.time()
@@ -284,10 +288,15 @@ class ShortTermMoodPlugin(Star):
                 response_tendency=state.response_tendency,
                 immediate_reaction=bool(self.config.get("react_to_current_message", True)) and not job.proactive,
                 preferences=job.preferences,
+                conversation_style=job.conversation_style,
+                banter_level=job.banter_level,
+                feeling_history=state.feeling_history,
             )
             event.set_extra(EVENT_HINT, hint)
             self.schedule_save()
             self.enqueue(job)
+        if self.config.get("emotion_first", True) and EMOTIONAL_SYSTEM_FRAME not in (request.system_prompt or ""):
+            request.system_prompt = (request.system_prompt or "") + "\n\n" + EMOTIONAL_SYSTEM_FRAME
         if not any(isinstance(part, TextPart) and part.text.startswith(MARKER) for part in request.extra_user_content_parts):
             request.extra_user_content_parts.append(TextPart(text=hint).mark_as_temp())
 

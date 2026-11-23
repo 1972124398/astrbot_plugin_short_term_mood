@@ -105,7 +105,10 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(request.extra_user_content_parts), 2)
         self.assertIs(request.extra_user_content_parts[0], existing)
         self.assertTrue(request.extra_user_content_parts[-1].model_dump_for_context()["_no_save"])
-        self.assertEqual(request.system_prompt, "人格、工具和表情说明")
+        from astrbot_plugin_short_term_mood.prompts import EMOTIONAL_SYSTEM_FRAME
+
+        self.assertEqual(request.system_prompt, "人格、工具和表情说明\n\n" + EMOTIONAL_SYSTEM_FRAME)
+        self.assertEqual(request.system_prompt.count(EMOTIONAL_SYSTEM_FRAME), 1)
         self.assertEqual(request.prompt, "合并后的多条消息")
         self.assertEqual(request.contexts, [{"role": "user", "content": "先前消息"}])
         self.assertEqual(request.image_urls, ["https://example.invalid/a.png"])
@@ -346,6 +349,13 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         hint = next_event.get_extra(EVENT_HINT)
         self.assertIn(self.appraisal["inner_state"], hint)
         self.assertIn(self.appraisal["response_tendency"], hint)
+        await self.settle()
+
+    async def test_fixed_emotional_frame_can_be_disabled(self):
+        self.plugin.config["emotion_first"] = False
+        request = ProviderRequest(prompt="你好", system_prompt="原本人格")
+        await self.plugin.apply_mood(FakeEvent("a"), request)
+        self.assertEqual(request.system_prompt, "原本人格")
         await self.settle()
 
     async def test_native_configuration_schema_preserves_existing_settings(self):

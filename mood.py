@@ -42,6 +42,7 @@ class MoodState:
     recovery_ages: dict[str, float] = field(default_factory=dict)
     inner_state: str = ""
     response_tendency: str = ""
+    feeling_history: list[dict[str, str]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> MoodState:
@@ -66,6 +67,12 @@ class MoodState:
             },
             inner_state=str(data.get("inner_state") or "")[:160],
             response_tendency=str(data.get("response_tendency") or "")[:160],
+            feeling_history=[
+                {"feeling": str(item.get("feeling") or "")[:160],
+                 "tendency": str(item.get("tendency") or "")[:160]}
+                for item in data.get("feeling_history", [])[-5:]
+                if isinstance(item, dict)
+            ],
         )
 
     def as_dict(self) -> dict:
@@ -77,6 +84,7 @@ class MoodState:
             "recovery_ages": self.recovery_ages,
             "inner_state": self.inner_state,
             "response_tendency": self.response_tendency,
+            "feeling_history": self.feeling_history,
         }
 
     def recover(self, now: float, half_life: float, recovery_seconds: float, idle_seconds: float = 0) -> None:
@@ -99,6 +107,20 @@ class MoodState:
         if not self.levels:
             self.inner_state = ""
             self.response_tendency = ""
+            self.feeling_history.clear()
+
+    def remember_feeling(self, feeling: str, tendency: str) -> None:
+        if not self.levels:
+            self.inner_state = ""
+            self.response_tendency = ""
+            self.feeling_history.clear()
+            return
+        self.inner_state = feeling or self.inner_state
+        self.response_tendency = tendency or self.response_tendency
+        entry = {"feeling": self.inner_state, "tendency": self.response_tendency}
+        if any(entry.values()) and (not self.feeling_history or self.feeling_history[-1] != entry):
+            self.feeling_history.append(entry)
+            self.feeling_history = self.feeling_history[-5:]
 
     def apply(self, deltas: dict[str, float], now: float, sensitivity: float, inertia: float = 0) -> None:
         for name, delta in deltas.items():
@@ -116,6 +138,7 @@ class MoodState:
             if change >= EPSILON:
                 self.stimulated[name] = now
                 self.recovery_ages[name] = 0.0
+
 
 class MoodStore:
     """One shared state and a bounded cache of persona-derived expression profiles."""

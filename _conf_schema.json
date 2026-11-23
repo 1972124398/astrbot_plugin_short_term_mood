@@ -20,7 +20,7 @@
   "analysis_timeout_seconds": {
     "description": "单轮情绪评估超时秒数",
     "type": "int",
-    "default": 15,
+    "default": 30,
     "slider": {"min": 1, "max": 120, "step": 1},
     "hint": "仅限制后台检测耗时，前台直接使用已有情绪。失败后的重试间隔可在下方修改。"
   },
@@ -91,6 +91,27 @@
     "default": 1.0,
     "slider": {"min": 0.1, "max": 2.0, "step": 0.1},
     "hint": "调节心境在说话中的表现。较低值更含蓄，较高值情绪更明显，适合希望角色更有脾气、更热情或更活泼的场景。"
+  },
+  "emotion_first": {
+    "description": "让情绪充分参与聊天表达",
+    "type": "bool",
+    "default": true,
+    "hint": "允许短期心境自然改变平时的礼貌、热情、耐心和接话意愿。开启时会在每轮系统提示尾部加入固定的日常相处说明，角色身份和实际工具权限沿用主提示词。"
+  },
+  "conversation_style": {
+    "description": "日常聊天气质",
+    "type": "string",
+    "default": "casual",
+    "options": ["casual", "lively", "subtle"],
+    "labels": ["随性自然", "活泼外露", "含蓄细腻"],
+    "hint": "都以主提示词的人格与关系为基础。随性自然适合日常相处，活泼外露更容易看见小脾气和玩心，含蓄细腻偏向用词与语气的细小变化。"
+  },
+  "banter_level": {
+    "description": "玩心与接梗意愿",
+    "type": "float",
+    "default": 0.6,
+    "slider": {"min": 0.0, "max": 1.0, "step": 0.1},
+    "hint": "关系与语境允许时，越高越愿意接梗、轻怼、假装嫌弃或嘴硬。会结合善意打趣与真正冲突作不同反应。0 表示按人格自由发挥。"
   },
   "emotion_inertia": {
     "description": "情绪余韵与惯性",

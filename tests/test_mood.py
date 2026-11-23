@@ -142,6 +142,26 @@ class MoodTests(unittest.TestCase):
         self.assertEqual(deltas["anger"], 0)
         self.assertEqual((inner_state, tendency), ("", ""))
 
+    def test_recent_feelings_keep_a_short_progression_and_skip_repeats(self):
+        state = MoodState({"affection": 0.5}, {"affection": 100}, updated=100)
+        for index in range(7):
+            state.remember_feeling(f"心境 {index}", "想接着聊")
+        state.remember_feeling("心境 6", "想接着聊")
+        self.assertEqual(len(state.feeling_history), 5)
+        reloaded = MoodState.from_dict(state.as_dict())
+        self.assertEqual(reloaded.feeling_history[0]["feeling"], "心境 2")
+        reloaded.recover(2000, 300, 1200)
+        self.assertEqual(reloaded.feeling_history, [])
+
+    def test_chat_style_and_playfulness_shape_everyday_expression(self):
+        hint = build_hint({"affection": 0.4, "grievance": 0.3}, None, True,
+                          conversation_style="lively", banter_level=0.8,
+                          feeling_history=[{"feeling": "本来挺高兴"}, {"feeling": "有点别扭"}])
+        self.assertIn("雀跃、接梗", hint)
+        self.assertIn("想靠近又有点别扭", hint)
+        self.assertIn("本来挺高兴", hint)
+        self.assertIn("0.80", hint)
+
 
 if __name__ == "__main__":
     unittest.main()
