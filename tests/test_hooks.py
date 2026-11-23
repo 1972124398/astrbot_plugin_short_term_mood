@@ -71,6 +71,17 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         if self.plugin.save_task is not None:
             await self.plugin.save_task
 
+    async def test_background_task_is_not_framed_as_a_new_personal_stimulus(self):
+        event = FakeEvent("a", "Codex 返回了任务结果")
+        event.set_extra("codex_bridge", {"kind": "task_result"})
+        request = ProviderRequest(prompt=event.message)
+        await self.plugin.apply_mood(event, request)
+        self.assertNotIn("当前消息发生的新刺激", request.extra_user_content_parts[-1].text)
+        self.assertEqual(self.plugin.state.last_interaction, 0)
+        await self.settle()
+        payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
+        self.assertEqual(payload["event_kind"], "task_event")
+
     async def test_different_conversations_and_personas_share_one_state(self):
         first, second = FakeEvent("wechat:private:a"), FakeEvent("qq:group:b")
         await self.plugin.apply_mood(first, ProviderRequest(prompt="你真讨厌"))

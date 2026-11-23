@@ -324,7 +324,7 @@ class ShortTermMoodPlugin(Star):
                 expression_strength=self.number("expression_strength", 1.0, 0.1, 2.0),
                 inner_state=state.inner_state,
                 response_tendency=state.response_tendency,
-                immediate_reaction=bool(self.config.get("react_to_current_message", True)) and not job.proactive,
+                immediate_reaction=bool(self.config.get("react_to_current_message", True)) and job.event_kind == "dialogue",
                 preferences=job.preferences,
                 conversation_style=job.conversation_style,
                 banter_level=job.banter_level,
