@@ -38,3 +38,7 @@
 升级到 0.3.0 时会保留已有情绪、恢复时间、模型和开关设置。旧的 `refusal_threshold`、`refusal_probability` 和 `refusal_cooldown_seconds` 停止使用。人格表达缓存会在首次后台检测时更新为十种情绪与平稳状态，修改补充表达偏好后也会自动重新生成。
 
 返回 [使用说明](../README.md)。
+
+## 拟人插件联动
+
+`interop_enabled` 默认开启，自动发现可用同伴；关闭后独立使用。前台只读取状态与排队，感受评估在后台完成。详见[四插件联动](LINKING.md)。

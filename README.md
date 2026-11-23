@@ -128,3 +128,9 @@ https://github.com/1972124398/astrbot_plugin_short_term_mood
 | [Codex 任务桥接](https://github.com/1972124398/astrbot_plugin_codex_bridge) | 从私聊提交本机 Codex 后台任务 |
 
 采用 [0BSD 许可证](LICENSE)，允许使用、修改、分发和商用，无需保留署名。
+
+## 四个插件自然联动
+
+可与 Codex Bridge、陪它玩、自娱自乐和短期共享情绪自动配合，共享心情与当前活动，游戏和见闻也能留下相处余韵。单独安装同样可用，配置页可开关联动。
+
+查看[联动效果与配置](docs/LINKING.md)。

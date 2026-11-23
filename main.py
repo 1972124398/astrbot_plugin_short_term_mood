@@ -4,8 +4,9 @@ import asyncio
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -15,6 +16,7 @@ from astrbot.core.agent.message import TextPart
 
 from .mood import EMOTIONS, MoodState, MoodStore, finite_number
 from .prompts import APPRAISAL_SYSTEM, EMOTIONAL_SYSTEM_FRAME, MARKER, build_hint, parse_appraisal
+from .interop import CompanionLink, event_kind
 
 
 EVENT_HINT = "astrbot_short_term_mood.hint"
@@ -35,6 +37,8 @@ class AppraisalJob:
     preferences: str
     conversation_style: str
     banter_level: float
+    event_kind: str = "dialogue"
+    experience: dict | None = None
 
 
 class ShortTermMoodPlugin(Star):
@@ -43,6 +47,7 @@ class ShortTermMoodPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self.link = CompanionLink(context, "short_term_mood", config)
         self.store = MoodStore(Path(StarTools.get_data_dir("astrbot_plugin_short_term_mood")) / "mood.sqlite3")
         try:
             self.state = self.store.load()
@@ -58,6 +63,35 @@ class ShortTermMoodPlugin(Star):
         self.closing = False
         self.generation = 0
         self.retry_after = 0.0
+
+    def companion_snapshot(self, origin=""):
+        state = self.read_state()
+        return {"levels": dict(state.levels), "inner_state": state.inner_state,
+                "response_tendency": state.response_tendency}
+
+    def companion_observe(self, packet):
+        if self.closing or not self.link.enabled or packet["kind"] not in {"game_turn", "leisure_experience"}:
+            return
+        data = packet["data"]
+        event = SimpleNamespace(
+            unified_msg_origin=packet["origin"], get_extra=lambda _: None,
+            message_obj=SimpleNamespace(message_id=packet["id"]),
+            get_message_str=lambda: data.get("human_text", ""),
+        )
+        request = ProviderRequest(prompt=data.get("human_text", ""), system_prompt=data.get("persona", ""))
+        job = self.snapshot(event, request)
+        experience = {key: value for key, value in data.items() if key != "persona"}
+        if packet["kind"] == "game_turn":
+            self.read_state().last_interaction = time.time()
+        self.enqueue(replace(job, event_kind="shared_experience", experience=experience))
+
+    @filter.on_llm_response(priority=-100)
+    async def finish_response(self, event: AstrMessageEvent, response):
+        self.link.end(event, response)
+
+    @filter.on_agent_done(priority=-100)
+    async def finish_agent(self, event: AstrMessageEvent, run_context, response):
+        self.link.end(event)
 
     def number(self, key: str, default: float, minimum: float, maximum: float) -> float:
         try:
@@ -157,8 +191,7 @@ class ShortTermMoodPlugin(Star):
         conversation_style = str(self.config.get("conversation_style", "casual"))
         banter_level = self.number("banter_level", 0.6, 0, 1)
         key = hashlib.sha256(json.dumps(["v4", persona, provider_id, request.model, preferences, conversation_style, banter_level], ensure_ascii=False).encode()).hexdigest()
-        message_id = getattr(getattr(event, "message_obj", None), "message_id", "")
-        proactive = str(message_id).startswith("proactive:")
+        proactive = event_kind(event) == "proactive"
         return AppraisalJob(
             generation=self.generation,
             key=key,
@@ -173,6 +206,7 @@ class ShortTermMoodPlugin(Star):
             preferences=preferences,
             conversation_style=conversation_style,
             banter_level=banter_level,
+            event_kind=event_kind(event),
         )
 
     def enqueue(self, job: AppraisalJob):
@@ -207,7 +241,8 @@ class ShortTermMoodPlugin(Star):
             "conversation_style": job.conversation_style,
             "banter_level": job.banter_level,
             "feeling_history": [dict(item) for item in state.feeling_history],
-            "event_kind": "proactive" if job.proactive else "dialogue",
+            "event_kind": job.event_kind,
+            "shared_experience": job.experience,
             "recent_dialogue": job.recent,
             "current_input": job.prompt,
             "need_profiles": profiles is None,
@@ -270,6 +305,9 @@ class ShortTermMoodPlugin(Star):
             return
         if event.get_extra("short_term_mood_skip") is True or event.is_stopped():
             return
+        if event_kind(event) != "proactive":
+            self.link.begin(event)
+            self.link.inject(event, request)
         message = (event.get_message_str() or "").lstrip()
         prefixes = self.config.get("command_prefixes", ["/", "!"])
         if any(message.startswith(prefix) for prefix in prefixes if isinstance(prefix, str) and prefix):
@@ -278,7 +316,7 @@ class ShortTermMoodPlugin(Star):
         if not isinstance(hint, str):
             job = self.snapshot(event, request)
             state = self.read_state()
-            if not job.proactive:
+            if job.event_kind == "dialogue":
                 state.last_interaction = time.time()
             hint = build_hint(
                 state.levels, self.cached_profile(job.key),
@@ -356,6 +394,7 @@ class ShortTermMoodPlugin(Star):
         if self.closing:
             return
         self.closing = True
+        self.link.close()
         self.invalidate_pending()
         if self.worker is not None:
             self.worker.cancel()

@@ -21,28 +21,44 @@
     "description": "单轮情绪评估超时秒数",
     "type": "int",
     "default": 30,
-    "slider": {"min": 1, "max": 120, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 120,
+      "step": 1
+    },
     "hint": "仅限制后台检测耗时，前台直接使用已有情绪。失败后的重试间隔可在下方修改。"
   },
   "analysis_retry_seconds": {
     "description": "后台检测失败后的重试间隔秒数",
     "type": "int",
     "default": 30,
-    "slider": {"min": 0, "max": 3600, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 3600,
+      "step": 1
+    },
     "hint": "间隔内跳过新检测，已有情绪仍参与对话。0 表示下条消息立即重试。"
   },
   "analysis_queue_size": {
     "description": "后台待检测消息上限",
     "type": "int",
     "default": 16,
-    "slider": {"min": 1, "max": 256, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 256,
+      "step": 1
+    },
     "hint": "检测按顺序进行。队列满时舍弃最早的待处理项，优先跟上最近的互动。"
   },
   "analysis_max_age_seconds": {
     "description": "后台检测结果的最长有效时间秒数",
     "type": "int",
     "default": 120,
-    "slider": {"min": 1, "max": 3600, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 3600,
+      "step": 1
+    },
     "hint": "从消息入队开始计时。排队或检测完成时已超时的结果会被丢弃，避免旧消息很久之后才影响情绪。"
   },
   "sustain_during_conversation": {
@@ -55,28 +71,44 @@
     "description": "停止互动多久后开始自然恢复，单位秒",
     "type": "int",
     "default": 300,
-    "slider": {"min": 0, "max": 86400, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 86400,
+      "step": 1
+    },
     "hint": "默认最后一次真实互动后等待 5 分钟。主动聊天、查询情绪状态和插件命令不会续期。0 表示立即进入自然恢复。"
   },
   "half_life_seconds": {
     "description": "情绪强度减半所需秒数",
     "type": "int",
     "default": 300,
-    "slider": {"min": 10, "max": 86400, "step": 1},
+    "slider": {
+      "min": 10,
+      "max": 86400,
+      "step": 1
+    },
     "hint": "在自然恢复计时期间，默认每 5 分钟强度减半。持续对话保持情绪开启时，活跃期间暂停计时。"
   },
   "recovery_seconds": {
     "description": "单种情绪的最长自然恢复时间秒数",
     "type": "int",
     "default": 1200,
-    "slider": {"min": 30, "max": 86400, "step": 1},
+    "slider": {
+      "min": 30,
+      "max": 86400,
+      "step": 1
+    },
     "hint": "累计自然恢复达到此时间后归于平稳，默认 20 分钟。开启持续对话保持时，活跃期间暂停累计。明显同类刺激会重置该情绪的恢复计时。"
   },
   "sensitivity": {
     "description": "情绪敏感度",
     "type": "float",
     "default": 1.0,
-    "slider": {"min": 0.1, "max": 2.0, "step": 0.1},
+    "slider": {
+      "min": 0.1,
+      "max": 2.0,
+      "step": 0.1
+    },
     "hint": "范围 0.1 到 2，越高越容易受互动影响。"
   },
   "enable_refusal": {
@@ -89,7 +121,11 @@
     "description": "情绪表达鲜明程度",
     "type": "float",
     "default": 1.0,
-    "slider": {"min": 0.1, "max": 2.0, "step": 0.1},
+    "slider": {
+      "min": 0.1,
+      "max": 2.0,
+      "step": 0.1
+    },
     "hint": "调节心境在说话中的表现。较低值更含蓄，较高值情绪更明显，适合希望角色更有脾气、更热情或更活泼的场景。"
   },
   "emotion_first": {
@@ -102,22 +138,38 @@
     "description": "日常聊天气质",
     "type": "string",
     "default": "casual",
-    "options": ["casual", "lively", "subtle"],
-    "labels": ["随性自然", "活泼外露", "含蓄细腻"],
+    "options": [
+      "casual",
+      "lively",
+      "subtle"
+    ],
+    "labels": [
+      "随性自然",
+      "活泼外露",
+      "含蓄细腻"
+    ],
     "hint": "都以主提示词的人格与关系为基础。随性自然适合日常相处，活泼外露更容易看见小脾气和玩心，含蓄细腻偏向用词与语气的细小变化。"
   },
   "banter_level": {
     "description": "玩心与接梗意愿",
     "type": "float",
     "default": 0.6,
-    "slider": {"min": 0.0, "max": 1.0, "step": 0.1},
+    "slider": {
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.1
+    },
     "hint": "关系与语境允许时，越高越愿意接梗、轻怼、假装嫌弃或嘴硬。会结合善意打趣与真正冲突作不同反应。0 表示按人格自由发挥。"
   },
   "emotion_inertia": {
     "description": "情绪余韵与惯性",
     "type": "float",
     "default": 0.35,
-    "slider": {"min": 0.0, "max": 0.9, "step": 0.05},
+    "slider": {
+      "min": 0.0,
+      "max": 0.9,
+      "step": 0.05
+    },
     "hint": "已有的强烈情绪在被安抚或转变时会有余韵。越高越需要一个逐渐缓和的过程，0 表示直接使用检测模型给出的变化幅度。自然恢复时间由原来的时间配置决定。"
   },
   "react_to_current_message": {
@@ -136,13 +188,26 @@
     "description": "人格情绪表达提示的缓存时间秒数",
     "type": "int",
     "default": 604800,
-    "slider": {"min": 60, "max": 2592000, "step": 60},
+    "slider": {
+      "min": 60,
+      "max": 2592000,
+      "step": 60
+    },
     "hint": "默认 7 天，主提示词变化后会自动重新生成。首次生成也在后台进行，完成前使用通用的角色表达提示。"
   },
   "command_prefixes": {
     "description": "跳过情绪处理的命令前缀",
     "type": "list",
-    "default": ["/", "!"],
+    "default": [
+      "/",
+      "!"
+    ],
     "hint": "按用户原始消息识别前缀，避免命令改变情绪。可与其他插件的命令格式保持一致。"
+  },
+  "interop_enabled": {
+    "description": "与其他拟人插件自然联动",
+    "type": "bool",
+    "default": true,
+    "hint": "自动发现 Codex Bridge、陪它玩、自娱自乐和短期共享情绪。共享心境、当前会话的相处与活动背景；未安装的能力自动略过，单独安装也能使用。"
   }
 }
