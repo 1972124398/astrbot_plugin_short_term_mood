@@ -85,7 +85,16 @@ class ShortTermMoodPlugin(Star):
     async def persist_state(self):
         async with self.persistence_lock:
             snapshot = MoodState.from_dict(self.state.as_dict())
-            await asyncio.to_thread(self.store.save, snapshot)
+            await self.write_store(self.store.save, snapshot)
+
+    async def write_store(self, operation, *args):
+        task = asyncio.create_task(asyncio.to_thread(operation, *args))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Finish the thread before a cancelled caller releases the database lock.
+            await task
+            raise
 
     def schedule_save(self):
         self.dirty = True
@@ -216,16 +225,10 @@ class ShortTermMoodPlugin(Star):
                 self.profiles.pop(min(self.profiles, key=lambda key: self.profiles[key][1]))
             async with self.persistence_lock:
                 if job.generation == self.generation:
-                    write = asyncio.create_task(asyncio.to_thread(
+                    await self.write_store(
                         self.store.save_profile, job.key, generated, created,
                         self.number("profile_cache_seconds", 604800, 60, 2592000),
-                    ))
-                    try:
-                        await asyncio.shield(write)
-                    except asyncio.CancelledError:
-                        # SQLite must finish the threaded operation before unload closes it.
-                        await write
-                        raise
+                    )
 
     async def analyze_queue(self):
         while True:
@@ -316,7 +319,7 @@ class ShortTermMoodPlugin(Star):
         self.invalidate_pending()
         self.profiles.clear()
         async with self.persistence_lock:
-            await asyncio.to_thread(self.store.clear_profiles)
+            await self.write_store(self.store.clear_profiles)
         yield event.plain_result("已清除情绪表达缓存，下次对话会按主提示词重新生成。")
 
     async def terminate(self):
@@ -332,4 +335,4 @@ class ShortTermMoodPlugin(Star):
         try:
             await self.persist_state()
         finally:
-            await asyncio.to_thread(self.store.close)
+            await self.write_store(self.store.close)

@@ -3,6 +3,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -282,6 +283,32 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.plugin.terminate(), 0.5)
         self.assertTrue(self.plugin.worker.done())
         self.assertEqual(self.plugin.queue.qsize(), 0)
+
+    async def test_cancelled_write_keeps_database_serialized_until_thread_finishes(self):
+        started = asyncio.Event()
+        release = threading.Event()
+        loop = asyncio.get_running_loop()
+        original_save = self.plugin.store.save
+
+        def slow_save(state):
+            loop.call_soon_threadsafe(started.set)
+            if not release.wait(timeout=2):
+                raise TimeoutError("Test did not release the storage thread")
+            original_save(state)
+
+        with patch.object(self.plugin.store, "save", side_effect=slow_save):
+            task = asyncio.create_task(self.plugin.persist_state())
+            try:
+                await started.wait()
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertTrue(self.plugin.persistence_lock.locked())
+                self.assertFalse(task.done())
+            finally:
+                release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertFalse(self.plugin.persistence_lock.locked())
 
     async def test_queue_capacity_keeps_recent_interactions(self):
         started, release = asyncio.Event(), asyncio.Event()
