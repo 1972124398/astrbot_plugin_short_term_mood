@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -36,6 +37,9 @@ class FakeEvent:
     def is_stopped(self):
         return False
 
+    def plain_result(self, text):
+        return text
+
 
 @unittest.skipUnless(SDK_AVAILABLE, "Requires AstrBot SDK for integration checks")
 class HookTests(unittest.IsolatedAsyncioTestCase):
@@ -60,11 +64,18 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.terminate()
         self.directory.cleanup()
 
+    async def settle(self):
+        await asyncio.wait_for(self.plugin.queue.join(), timeout=2)
+        if self.plugin.save_task is not None:
+            await self.plugin.save_task
+
     async def test_different_conversations_and_personas_share_one_state(self):
         first, second = FakeEvent("wechat:private:a"), FakeEvent("qq:group:b")
         await self.plugin.apply_mood(first, ProviderRequest(prompt="你真讨厌"))
+        await self.settle()
         self.persona = {"prompt": "你是克制而冷淡的角色。"}
         await self.plugin.apply_mood(second, ProviderRequest(prompt="你真讨厌"))
+        await self.settle()
         state = self.plugin.store.load()
         self.assertGreater(state.levels["anger"], 0.59)
         payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
@@ -86,6 +97,8 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         request.func_tool = tools
         await self.plugin.apply_mood(event, request)
         await self.plugin.apply_mood(event, request)
+        self.context.llm_generate.assert_not_awaited()
+        await self.settle()
         self.context.llm_generate.assert_awaited_once()
         self.assertEqual(len(request.extra_user_content_parts), 2)
         self.assertIs(request.extra_user_content_parts[0], existing)
@@ -102,6 +115,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
             self.plugin.apply_mood(FakeEvent(str(index)), ProviderRequest(prompt="刺激"))
             for index in range(3)
         ))
+        await self.settle()
         self.assertGreater(self.plugin.store.load().levels["anger"], 0.89)
 
     async def test_commands_and_opt_out_skip_assessment(self):
@@ -113,30 +127,37 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         self.context.llm_generate.assert_not_awaited()
 
     async def test_provider_failure_keeps_reply_and_recovers_old_affect(self):
-        self.plugin.store.save(MoodState({"anger": 0.8}, {"anger": 1}, updated=1))
+        self.plugin.state = MoodState({"anger": 0.8}, {"anger": 1}, updated=1)
         self.context.llm_generate.side_effect = RuntimeError("provider unavailable")
         event, request = FakeEvent("a"), ProviderRequest(prompt="你好")
         await self.plugin.apply_mood(event, request)
         self.assertIn("心境已恢复平稳", event.get_extra(EVENT_HINT))
+        await self.settle()
         await self.plugin.apply_mood(FakeEvent("b"), ProviderRequest(prompt="你好"))
+        await self.settle()
         self.context.llm_generate.assert_awaited_once()
         self.assertEqual(self.plugin.store.load().levels, {})
 
     async def test_persona_cache_regenerates_when_main_prompt_changes(self):
         await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="你好"))
+        await self.settle()
         await self.plugin.apply_mood(FakeEvent("b"), ProviderRequest(prompt="你好"))
+        await self.settle()
         payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
         self.assertFalse(payload["need_profiles"])
         self.persona = {"prompt": "新主提示词"}
         await self.plugin.apply_mood(FakeEvent("c"), ProviderRequest(prompt="你好"))
+        await self.settle()
         payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
         self.assertTrue(payload["need_profiles"])
 
     async def test_proactive_chat_uses_shared_mood_without_inventing_stimuli(self):
         await self.plugin.apply_mood(FakeEvent("private:a"), ProviderRequest(prompt="刺激"))
+        await self.settle()
         event = FakeEvent("private:b", "")
         event.message_obj = SimpleNamespace(message_id="proactive:123")
         await self.plugin.apply_mood(event, ProviderRequest(prompt="主动聊天生成指令"))
+        await self.settle()
         self.context.llm_generate.assert_awaited_once()
         self.assertIn("生气", event.get_extra(EVENT_HINT))
         self.assertLessEqual(self.plugin.store.load().levels["anger"], 0.3)
@@ -145,7 +166,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         import time
 
         now = time.time()
-        self.plugin.store.save(MoodState({"anger": 1}, {"anger": now}, updated=now))
+        self.plugin.state = MoodState({"anger": 1}, {"anger": now}, updated=now)
         self.plugin.config.update({"refusal_probability": 1, "refusal_cooldown_seconds": 0})
         with patch("astrbot_plugin_short_term_mood.main.random.random", return_value=0):
             first, second = FakeEvent("a"), FakeEvent("b")
@@ -153,6 +174,158 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
             await self.plugin.apply_mood(second, ProviderRequest(prompt="刺激"))
         self.assertIn("本轮允许短暂婉拒", first.get_extra(EVENT_HINT))
         self.assertIn("本轮保持回应意愿", second.get_extra(EVENT_HINT))
+
+    async def test_slow_background_model_does_not_block_any_frontend_conversation(self):
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_model(**kwargs):
+            started.set()
+            await release.wait()
+            return SimpleNamespace(completion_text=json.dumps(self.appraisal))
+
+        self.context.llm_generate.side_effect = slow_model
+        first, second = FakeEvent("private:a"), FakeEvent("group:b")
+        await asyncio.wait_for(self.plugin.apply_mood(first, ProviderRequest(prompt="刺激")), 0.1)
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.wait_for(self.plugin.apply_mood(second, ProviderRequest(prompt="新的互动")), 0.1)
+        self.assertFalse(release.is_set())
+        self.assertIn("心境已恢复平稳", second.get_extra(EVENT_HINT))
+        release.set()
+        await self.settle()
+        later = FakeEvent("private:c")
+        await self.plugin.apply_mood(later, ProviderRequest(prompt="你好"))
+        self.assertIn("生气", later.get_extra(EVENT_HINT))
+        await self.settle()
+
+    async def test_reset_discards_late_results_without_waiting_for_the_model(self):
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_model(**kwargs):
+            started.set()
+            await release.wait()
+            return SimpleNamespace(completion_text=json.dumps(self.appraisal))
+
+        self.context.llm_generate.side_effect = slow_model
+        await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="刺激"))
+        await started.wait()
+
+        async def reset():
+            return [result async for result in self.plugin.mood_reset(FakeEvent("admin"))]
+
+        await asyncio.wait_for(reset(), 0.5)
+        release.set()
+        await self.settle()
+        self.assertEqual(self.plugin.state.levels, {})
+        self.assertEqual(self.plugin.profiles, {})
+
+    async def test_background_uses_immutable_request_snapshot(self):
+        request = ProviderRequest(prompt="原始消息", image_urls=["original.png"])
+        event = FakeEvent("a")
+        await self.plugin.apply_mood(event, request)
+        request.prompt = "后续改写"
+        request.image_urls.clear()
+        self.persona = {"prompt": "后续切换的人格"}
+        await self.settle()
+        arguments = self.context.llm_generate.call_args.kwargs
+        payload = json.loads(arguments["prompt"])
+        self.assertEqual(payload["current_input"], "原始消息")
+        self.assertNotIn("后续切换", payload["persona"])
+        self.assertEqual(arguments["image_urls"], ["original.png"])
+
+    async def test_stale_result_cannot_reintroduce_emotion(self):
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_model(**kwargs):
+            started.set()
+            await release.wait()
+            return SimpleNamespace(completion_text=json.dumps(self.appraisal))
+
+        self.context.llm_generate.side_effect = slow_model
+        original_snapshot = self.plugin.snapshot
+        with patch.object(self.plugin, "snapshot", side_effect=lambda *args: replace(original_snapshot(*args), queued_at=0)):
+            # Accept the old job initially, then tighten the window while the model is running.
+            with patch.object(self.plugin, "job_current", return_value=True):
+                await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="刺激"))
+                await started.wait()
+        self.plugin.config["analysis_max_age_seconds"] = 1
+        release.set()
+        await self.settle()
+        self.assertEqual(self.plugin.state.levels, {})
+
+    async def test_configured_timeout_only_cancels_background_detection(self):
+        started = asyncio.Event()
+
+        async def blocked_model(**kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        self.context.llm_generate.side_effect = blocked_model
+        self.plugin.config["analysis_timeout_seconds"] = 1
+        await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="刺激"))
+        await started.wait()
+        await asyncio.wait_for(self.plugin.apply_mood(FakeEvent("b"), ProviderRequest(prompt="你好")), 0.1)
+        await self.settle()
+        self.context.llm_generate.assert_awaited_once()
+        self.assertGreater(self.plugin.retry_after, 0)
+        self.assertEqual(self.plugin.state.levels, {})
+
+    async def test_unload_cancels_pending_model_and_closes_worker(self):
+        started = asyncio.Event()
+
+        async def blocked_model(**kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        self.context.llm_generate.side_effect = blocked_model
+        await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="刺激"))
+        await started.wait()
+        await asyncio.wait_for(self.plugin.terminate(), 0.5)
+        self.assertTrue(self.plugin.worker.done())
+        self.assertEqual(self.plugin.queue.qsize(), 0)
+
+    async def test_queue_capacity_keeps_recent_interactions(self):
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_model(**kwargs):
+            started.set()
+            await release.wait()
+            return SimpleNamespace(completion_text=json.dumps(self.appraisal))
+
+        self.context.llm_generate.side_effect = slow_model
+        self.plugin.config["analysis_queue_size"] = 1
+        await self.plugin.apply_mood(FakeEvent("first"), ProviderRequest(prompt="第一条"))
+        await started.wait()
+        await self.plugin.apply_mood(FakeEvent("old"), ProviderRequest(prompt="应淘汰"))
+        await self.plugin.apply_mood(FakeEvent("latest"), ProviderRequest(prompt="最新"))
+        self.assertEqual(self.plugin.queue.qsize(), 1)
+        release.set()
+        await self.settle()
+        payloads = [json.loads(call.kwargs["prompt"]) for call in self.context.llm_generate.call_args_list]
+        self.assertEqual([payload["current_input"] for payload in payloads], ["第一条", "最新"])
+
+    async def test_old_refusal_eligibility_is_never_reused_for_another_request(self):
+        from astrbot_plugin_short_term_mood.prompts import build_hint
+
+        hint = build_hint({"anger": 0.9}, None, True)
+        self.assertIn("当前请求判断", hint)
+        self.assertIn("工具", hint)
+
+    async def test_native_configuration_schema_preserves_existing_settings(self):
+        from astrbot.api import AstrBotConfig
+
+        schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
+        config_path = Path(self.directory.name) / "config.json"
+        config_path.write_text(json.dumps({"analysis_timeout_seconds": 42, "half_life_seconds": 900}), encoding="utf-8")
+        config = AstrBotConfig(str(config_path), schema=schema)
+        self.assertEqual(config["analysis_timeout_seconds"], 42)
+        self.assertEqual(config["half_life_seconds"], 900)
+        self.assertTrue(config["sustain_during_conversation"])
+        self.assertEqual(config["conversation_idle_seconds"], 300)
+        self.assertEqual(schema["analysis_provider_id"]["_special"], "select_provider")
+        config["analysis_queue_size"] = 7
+        config.save_config()
+        reloaded = AstrBotConfig(str(config_path), schema=schema)
+        self.assertEqual(reloaded["analysis_queue_size"], 7)
 
 
 if __name__ == "__main__":

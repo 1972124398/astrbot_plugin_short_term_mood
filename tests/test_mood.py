@@ -76,14 +76,40 @@ class MoodTests(unittest.TestCase):
             {"deltas": {"anger": 2}},
             {"deltas": {"unknown": 0}},
             {"confidence": True},
-            {"allow_refusal": "false"},
         ):
             with self.subTest(override=override), self.assertRaises(ValueError):
                 parse_appraisal(json.dumps({**base, **override}), False)
         with self.assertRaises(ValueError):
             parse_appraisal(json.dumps(base), True)
         result = parse_appraisal(json.dumps({**base, "confidence": 0.5}), False)
-        self.assertEqual(result[:2], ({"anger": 0}, False))
+        self.assertEqual(result, ({"anger": 0}, None))
+
+    def test_active_dialogue_sustains_emotion_and_idle_time_recovers_it(self):
+        state = MoodState({"anger": 0.8}, {"anger": 100}, updated=100, last_interaction=100)
+        for now in range(200, 2001, 100):
+            state.recover(now, half_life=300, recovery_seconds=600, idle_seconds=300)
+            state.last_interaction = now
+            self.assertEqual(state.levels["anger"], 0.8)
+        state.recover(2600, half_life=300, recovery_seconds=600, idle_seconds=300)
+        self.assertAlmostEqual(state.levels["anger"], 0.4)
+        state.recover(2900, half_life=300, recovery_seconds=600, idle_seconds=300)
+        self.assertEqual(state.levels, {})
+
+    def test_soothing_changes_sustained_emotion_during_active_conversation(self):
+        state = MoodState({"anger": 0.8}, {"anger": 100}, updated=100, last_interaction=100)
+        state.recover(200, 300, 600, idle_seconds=300)
+        state.apply({"anger": -0.3, "affection": 0.2}, 200, 1)
+        self.assertAlmostEqual(state.levels["anger"], 0.5)
+        self.assertAlmostEqual(state.levels["affection"], 0.2)
+
+    def test_old_state_migrates_and_restart_preserves_active_recovery_age(self):
+        state = MoodState.from_dict({"levels": {"anger": 0.8}, "stimulated": {"anger": 100}, "updated": 100})
+        state.recover(400, 300, 600, idle_seconds=300)
+        self.assertAlmostEqual(state.levels["anger"], 0.4)
+        self.assertEqual(state.recovery_ages["anger"], 300)
+        reloaded = MoodState.from_dict(state.as_dict())
+        reloaded.recover(700, 300, 600, idle_seconds=300)
+        self.assertEqual(reloaded.levels, {})
 
     def test_profiles_are_cached_and_bounded(self):
         profiles = {name: "自然表达" for name in {"neutral", *EMOTIONS}}

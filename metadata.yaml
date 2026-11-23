@@ -1,7 +1,7 @@
 name: astrbot_plugin_short_term_mood
 display_name: 短期共享情绪
-desc: 智能体全局共享的短期情绪，按人格自动生成表达提示，随时间恢复并支持情绪性婉拒。
-version: 0.1.0
+desc: 后台检测跨对话共享情绪，持续聊天中自然变化，支持人格表达、空闲恢复与可视化配置。
+version: 0.2.0
 author: W1
 repo: https://github.com/1972124398/astrbot_plugin_short_term_mood
 astrbot_version: ">=4.29.4,<5"

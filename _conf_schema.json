@@ -8,7 +8,8 @@
     "description": "情绪评估模型 Provider ID",
     "type": "string",
     "default": "",
-    "hint": "留空时使用当前会话的聊天模型。每轮会额外调用一次，用于评估刺激，首次还会生成该人格的情绪表达提示。"
+    "_special": "select_provider",
+    "hint": "选择已配置的模型，留空时使用当前会话模型。检测在后台排队进行，完成后影响后续回复。可选独立 Provider 减少与聊天模型的额度竞争。"
   },
   "analyze_images": {
     "description": "评估当前消息中的图片或表情",
@@ -20,49 +21,97 @@
     "description": "单轮情绪评估超时秒数",
     "type": "int",
     "default": 15,
-    "hint": "有效范围 1 到 120。失败后冷却 30 秒再尝试，已有情绪继续自然恢复。"
+    "slider": {"min": 1, "max": 120, "step": 1},
+    "hint": "仅限制后台检测耗时，前台直接使用已有情绪。失败后的重试间隔可在下方修改。"
+  },
+  "analysis_retry_seconds": {
+    "description": "后台检测失败后的重试间隔秒数",
+    "type": "int",
+    "default": 30,
+    "slider": {"min": 0, "max": 3600, "step": 1},
+    "hint": "间隔内跳过新检测，已有情绪仍参与对话。0 表示下条消息立即重试。"
+  },
+  "analysis_queue_size": {
+    "description": "后台待检测消息上限",
+    "type": "int",
+    "default": 16,
+    "slider": {"min": 1, "max": 256, "step": 1},
+    "hint": "检测按顺序进行。队列满时舍弃最早的待处理项，优先跟上最近的互动。"
+  },
+  "analysis_max_age_seconds": {
+    "description": "后台检测结果的最长有效时间秒数",
+    "type": "int",
+    "default": 120,
+    "slider": {"min": 1, "max": 3600, "step": 1},
+    "hint": "从消息入队开始计时。排队或检测完成时已超时的结果会被丢弃，避免旧消息很久之后才影响情绪。"
+  },
+  "sustain_during_conversation": {
+    "description": "持续对话时保持情绪",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，真实互动未超过下方空闲时间时暂停自然衰减，后台检测仍能增强、缓和或改变情绪。关闭后按实际经过时间持续恢复。所有会话共享活动计时。"
+  },
+  "conversation_idle_seconds": {
+    "description": "停止互动多久后开始自然恢复，单位秒",
+    "type": "int",
+    "default": 300,
+    "slider": {"min": 0, "max": 86400, "step": 1},
+    "hint": "默认最后一次真实互动后等待 5 分钟。主动聊天、查询情绪状态和插件命令不会续期。0 表示立即进入自然恢复。"
   },
   "half_life_seconds": {
     "description": "情绪强度减半所需秒数",
     "type": "int",
     "default": 300,
-    "hint": "默认 5 分钟减半。有效范围 10 到 86400。"
+    "slider": {"min": 10, "max": 86400, "step": 1},
+    "hint": "在自然恢复计时期间，默认每 5 分钟强度减半。持续对话保持情绪开启时，活跃期间暂停计时。"
   },
   "recovery_seconds": {
-    "description": "单种情绪最后一次明显刺激后的最长持续秒数",
+    "description": "单种情绪的最长自然恢复时间秒数",
     "type": "int",
     "default": 1200,
-    "hint": "默认 20 分钟恢复平稳。普通聊天和安慰会继续衰减，新的明显同类刺激会重新计时。有效范围 30 到 86400。"
+    "slider": {"min": 30, "max": 86400, "step": 1},
+    "hint": "累计自然恢复达到此时间后归于平稳，默认 20 分钟。开启持续对话保持时，活跃期间暂停累计。明显同类刺激会重置该情绪的恢复计时。"
   },
   "sensitivity": {
     "description": "情绪敏感度",
     "type": "float",
     "default": 1.0,
+    "slider": {"min": 0.1, "max": 2.0, "step": 0.1},
     "hint": "范围 0.1 到 2，越高越容易受互动影响。"
   },
   "enable_refusal": {
     "description": "允许情绪性婉拒",
     "type": "bool",
     "default": true,
-    "hint": "负面情绪较强且当前话题适合婉拒时，按概率允许角色表达暂时不想继续或需要休息。仍经正常回复流程生成。"
+    "hint": "负面情绪较强时，按概率向当前回复提供有条件的婉拒提示，由聊天模型结合当前请求判断。认真求助、工具和工作任务要求正常处理。"
   },
   "refusal_threshold": {
     "description": "婉拒所需的主导负面情绪强度",
     "type": "float",
     "default": 0.65,
+    "slider": {"min": 0.1, "max": 1.0, "step": 0.01},
     "hint": "范围 0.1 到 1。"
   },
   "refusal_probability": {
     "description": "婉拒基础概率",
     "type": "float",
     "default": 0.3,
+    "slider": {"min": 0.0, "max": 1.0, "step": 0.01},
     "hint": "范围 0 到 1。实际概率为此数值乘以当前主导情绪强度。连续两次有效对话最多允许一次婉拒。"
   },
   "refusal_cooldown_seconds": {
     "description": "两次情绪性婉拒的最短间隔秒数",
     "type": "int",
     "default": 180,
+    "slider": {"min": 0, "max": 86400, "step": 1},
     "hint": "所有会话共享冷却，默认 3 分钟。范围 0 到 86400。"
+  },
+  "profile_cache_seconds": {
+    "description": "人格情绪表达提示的缓存时间秒数",
+    "type": "int",
+    "default": 604800,
+    "slider": {"min": 60, "max": 2592000, "step": 60},
+    "hint": "默认 7 天，主提示词变化后会自动重新生成。首次生成也在后台进行，完成前使用通用的角色表达提示。"
   },
   "command_prefixes": {
     "description": "跳过情绪处理的命令前缀",
