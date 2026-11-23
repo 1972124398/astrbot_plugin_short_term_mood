@@ -62,17 +62,25 @@
 
 要求 Python 3.12+、AstrBot `>=4.29.4,<5`，使用 AstrBot 内置的模型 Provider SDK，额外依赖为零。
 
-在 AstrBot 插件管理中通过仓库地址安装。
+在 AstrBot 插件管理中通过仓库地址安装，安装完成后会自动加载插件并提供配置入口。更新时使用插件卡片的更新、重载功能。
 
 ```text
 https://github.com/1972124398/astrbot_plugin_short_term_mood
 ```
 
-也可以在 AstrBot 根目录运行以下命令，然后在插件管理中重新扫描或重启 AstrBot。
+也可以在 AstrBot 根目录运行以下命令，然后在插件管理中重新扫描并加载本插件。
 
 ```shell
 git clone https://github.com/1972124398/astrbot_plugin_short_term_mood data/plugins/astrbot_plugin_short_term_mood
 ```
+
+插件支持单独重载。安装、加载和重载时，运行数据写入 `data/plugin_data/astrbot_plugin_short_term_mood`，模型使用 AstrBot 中已配置的 Provider。
+
+### Windows 原生微信运行环境
+
+使用 Windows 原生微信服务的环境，如果在重启后出现 `database family must be private and stable`，并伴随原生微信 API 返回 HTTP 500，可检查微信服务数据库及其 `-wal`、`-shm` 文件是否属于服务运行账户。某些启动令牌会把 SQLite 新建的临时文件归属设为 Administrators，导致微信服务自己的文件归属检查失败。该环境问题也可能在其他重启或数据库临时文件重建时出现。
+
+处理应在微信服务停止后，按其运行账户恢复相关文件归属，并修正微信服务启动进程的默认文件所有者。情绪插件的数据库为独立的 `mood.sqlite3`。插件的安装包包含情绪功能、配置窗口和测试代码，微信服务启动器由部署环境单独管理。
 
 ## 配置窗口
 
@@ -153,7 +161,7 @@ python -m unittest discover -s tests -v
 
 在能导入 AstrBot SDK 的 Python 环境中，同一命令还会运行真实 `ProviderRequest` 和 `TextPart` 的钩子集成验证。
 
-在 AstrBot 4.29.4 SDK 环境通过 36 项回归验证，覆盖日常聊天气质、短期心境轨迹、当前消息即时反应、连续回合的自主表达、情绪余韵、后台慢模型期间的前台响应、跨会话联动、原生配置、旧配置迁移、持续对话保持以及空闲恢复。GitHub Actions 分别运行 Python 3.11～3.13 的核心测试和 AstrBot 4.29.4 SDK 集成测试。
+在 AstrBot 4.29.4 SDK 环境验证日常聊天气质、短期心境轨迹、当前消息即时反应、连续回合的自主表达、情绪余韵、后台慢模型期间的前台响应、跨会话联动、原生配置、旧配置迁移、持续对话保持以及空闲恢复。安装回归还会在新进程与独立运行目录中使用 AstrBot 的真实核心初始化、插件加载和热重载流程，核对配置窗口 schema、数据库访问范围及其他插件文件保持完整。GitHub Actions 分别运行 Python 3.11～3.13 的核心测试和 AstrBot 4.29.4 SDK 集成测试。
 
 0.2.0 在独立测试状态下使用部署环境的 `deepseek-v4.1-flash`，验证赞赏、攻击、道歉会在后台更新情绪并生成八份人格表达提示。三次前台钩子额外耗时分别约 0.36、0.25、0.20 毫秒，相应后台检测耗时约 4.10、1.21、1.44 秒。这里测量的是插件钩子自身的耗时，实际聊天仍有模型生成与消息处理耗时。
 
