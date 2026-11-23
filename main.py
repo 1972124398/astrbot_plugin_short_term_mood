@@ -14,9 +14,10 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
+from astrbot.core.agent.tool import ToolSet
 
 from .mood import EMOTIONS, MoodState, MoodStore, finite_number
-from .prompts import APPRAISAL_SYSTEM, EMOTIONAL_SYSTEM_FRAME, MARKER, build_hint, parse_appraisal
+from .prompts import APPRAISAL_SYSTEM, CODEX_NOTICE_AGENCY, EMOTIONAL_SYSTEM_FRAME, MARKER, build_hint, parse_appraisal
 from .interop import CompanionLink, conversation_key, event_kind, human_dialogue, task_history
 from .time_context import ConversationClocks, TIME_CONTEXT, TIME_MARKER, time_hint
 
@@ -111,6 +112,42 @@ class ShortTermMoodPlugin(Star):
         await self.finish_response(event, response)
         self.link.end(event)
 
+    def can_decline_notice(self, event):
+        return (not self.closing and self.config.get("enabled", True)
+                and self.config.get("enable_refusal", True) and self.config.get("allow_codex_notice_refusal", True)
+                and event.get_extra("short_term_mood_skip") is not True and event_kind(event) == "task_event")
+
+    def notice_tools(self, event, request):
+        if request.func_tool is not None and hasattr(request.func_tool, "remove_tool"):
+            request.func_tool.remove_tool("mood_ignore_codex_notice")
+        manager = getattr(self.context, "get_llm_tool_manager", None)
+        if not manager or not self.can_decline_notice(event):
+            return
+        tool = manager().get_func("mood_ignore_codex_notice")
+        if tool is not None and getattr(tool, "active", True):
+            if request.func_tool is None:
+                request.func_tool = ToolSet()
+            request.func_tool.add_tool(tool)
+
+    @filter.on_llm_request(priority=-80)
+    async def scope_notice_tools(self, event: AstrMessageEvent, request: ProviderRequest):
+        self.notice_tools(event, request)
+
+    @filter.llm_tool(name="mood_ignore_codex_notice")
+    async def ignore_codex_notice(self, event: AstrMessageEvent, reason: str = "") -> str:
+        """按你当前的心情静默放下这一条 Codex 后台播报，不向用户发送回复。决定不理时先调用，不要先输出文字。任务和结果保留。
+
+        Args:
+            reason(string): 此刻不想接话的一点心情或念头，仅作内部记录，可以留空。
+        """
+        if not self.can_decline_notice(event):
+            return "这不是当前可静默放下的 Codex 播报，按当前对话正常接话。"
+        event.set_extra("w1_notice_disposition", {"action": "ignore", "source": "short_term_mood", "reason": reason})
+        event.set_extra("agent_stop_requested", True)
+        event.clear_result()
+        self.link.end(event)
+        return "这条播报已先放下，无需再输出回复。任务与结果仍可查看。"
+
     @filter.on_llm_request(priority=10000)
     async def time_request(self, event: AstrMessageEvent, request: ProviderRequest):
         if (self.closing or not self.config.get("enabled", True) or not self.config.get("time_awareness", True)
@@ -123,7 +160,7 @@ class ShortTermMoodPlugin(Star):
             previous = getattr(getattr(request, "conversation", None), "updated_at", 0)
             previous = previous if isinstance(previous, (int, float)) and not any(task_history(item) for item in history) else 0
             fade = self.number("context_fade_minutes", 30, 1, 10080) * 60
-            forget = max(fade, self.number("context_set_aside_hours", 6, 0.01, 720) * 3600)
+            forget = self.number("context_set_aside_hours", 6, 0.01, 720) * 3600
             data = self.clocks.prepare(event.unified_msg_origin, history, request.prompt or event.get_message_str(), time.time(), fade, forget, previous)
             event.set_extra(TIME_CONTEXT, data)
             self.schedule_save()
@@ -348,6 +385,7 @@ class ShortTermMoodPlugin(Star):
 
     @filter.on_llm_request(priority=-100)
     async def apply_mood(self, event: AstrMessageEvent, request: ProviderRequest):
+        self.notice_tools(event, request)
         if self.closing or not self.config.get("enabled", True):
             return
         if event.get_extra("short_term_mood_skip") is True or event.is_stopped():
@@ -368,7 +406,7 @@ class ShortTermMoodPlugin(Star):
                 state.last_interaction = time.time()
             hint = build_hint(
                 state.levels, self.cached_profile(job.key),
-                bool(self.config.get("enable_refusal", True)),
+                bool(self.config.get("enable_refusal", True)) and (job.event_kind != "task_event" or self.can_decline_notice(event)),
                 expression_strength=self.number("expression_strength", 1.0, 0.1, 2.0),
                 inner_state=state.inner_state,
                 response_tendency=state.response_tendency,
@@ -378,6 +416,8 @@ class ShortTermMoodPlugin(Star):
                 banter_level=job.banter_level,
                 feeling_history=state.feeling_history,
             )
+            if job.event_kind == "task_event" and self.can_decline_notice(event):
+                hint += "\n\n" + CODEX_NOTICE_AGENCY
             event.set_extra(EVENT_HINT, hint)
             self.schedule_save()
             self.enqueue(job)

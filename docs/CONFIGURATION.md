@@ -46,3 +46,7 @@
 ## 现实时间感与旧话题
 
 `time_awareness` 默认开启。`context_fade_minutes` 默认 30 分钟，`context_set_aside_hours` 默认 6 小时，`time_preferences` 可写角色习惯。均可在配置窗口修改。原历史保留，新的情绪评估从本次交流接起；Codex 回报不会续期。详见[聊天里也有现实时间](TIME_CONTEXT.md)。
+
+## Codex 内部报告的回应意愿
+
+`allow_codex_notice_refusal` 默认开启，跟随 `enable_refusal`。主模型可对内部报告表达不愿意，支持工具调用时可用 `mood_ignore_codex_notice` 静默放下。用户尚未看到原始报告，向用户说话时会自然带出背景。任务结果保留，不额外排队重播，也不增加前台情绪评估等待。详见[内部收件与情绪回应](MESSAGE_FLOW.md)。

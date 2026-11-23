@@ -117,6 +117,12 @@
     "default": true,
     "hint": "角色可依据人格、心境和当前语境直接表达不满、争辩、反问、转开话题或拒绝继续。是否发生由对话决定。关闭后仍保留情绪表达。"
   },
+  "allow_codex_notice_refusal": {
+    "description": "也可以不理 Codex 的内部报告",
+    "type": "bool",
+    "default": true,
+    "hint": "跟随“允许自主表达不愿意或拒绝”。Codex 的报告只发给 AI，用户尚未见过原文；模型可按心情先放下，支持工具调用时能静默跳过。任务与结果仍保留，不设固定概率。"
+  },
   "expression_strength": {
     "description": "情绪表达鲜明程度",
     "type": "float",

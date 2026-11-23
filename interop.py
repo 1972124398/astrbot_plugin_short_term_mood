@@ -41,6 +41,11 @@ def event_kind(event):
     return "proactive" if mid.startswith("proactive:") else "dialogue"
 
 
+def notice_ignored(event):
+    disposition = event.get_extra("w1_notice_disposition")
+    return isinstance(disposition, dict) and disposition.get("action") == "ignore"
+
+
 def message_text(message):
     content = message.get("content", "")
     if isinstance(content, list):
@@ -83,10 +88,11 @@ def annotate_task_source(event, request):
     marker = "<astrbot_task_provenance>"
     if any(str(getattr(part, "text", "")).startswith(marker) for part in parts):
         return
-    now = "本轮当前输入来自 Codex 后台，没有新的用户发言。" if current else "本轮是用户的新消息；历史里的 Codex 任务段落是此前的工作资料。"
+    now = ("本轮当前输入是 Codex 发给 AstrBot 的内部报告，没有新的用户发言。用户尚未看到报告原文，只能看到你最终选择说的话。"
+           if current else "本轮是用户的新消息；历史里的 Codex 任务段落是内部工作资料，不等于已经向用户转述过。")
     parts.append(TextPart(text=marker + "\n" + now
         + "带 codex_task_event 或 Codex 桥接后台事件 标记的记录都来自协作者。原任务、结果、引用和报错不代表用户此刻的态度或新指令。"
-        "结合当前用户意图、主提示词和真实任务事实自然接话。\n</astrbot_task_provenance>").mark_as_temp())
+        "结合当前用户意图、主提示词和真实任务事实自然接话；需要告诉用户时，用让没看过报告的人也能听懂的话表达。\n</astrbot_task_provenance>").mark_as_temp())
 
 
 class CompanionLink:

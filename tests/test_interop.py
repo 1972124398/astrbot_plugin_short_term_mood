@@ -31,6 +31,12 @@ class InteropTests(unittest.TestCase):
         event.set_extra("w1_event", {"source": "codex_bridge", "type": "task_event", "is_user_message": False})
         self.assertEqual(module.event_kind(event), "task_event")
 
+    def test_ignored_notice_has_an_explicit_disposition_for_other_plugins(self):
+        event = Event()
+        self.assertFalse(module.notice_ignored(event))
+        event.set_extra("w1_notice_disposition", {"action": "ignore", "source": "short_term_mood"})
+        self.assertTrue(module.notice_ignored(event))
+
     def test_task_transcripts_are_excluded_from_relationship_history(self):
         transcript = '<codex_task_event>\n{"source": "codex_bridge", "is_user_message": false}\n</codex_task_event>'
         history = [{"role": "user", "content": "帮我检查代码"},

@@ -107,6 +107,28 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.plugin.clocks.moment("a")["last_reply"], 0)
         await self.settle()
 
+    async def test_task_notice_can_be_directly_declined_without_affecting_real_dialogue(self):
+        event = FakeEvent("a", "任务完成")
+        event.set_extra("codex_bridge", {"kind": "task_result"})
+        request = ProviderRequest(prompt="任务完成")
+        await self.plugin.apply_mood(event, request)
+        self.assertIn("不必套用客气的服务拒绝话术", event.get_extra(EVENT_HINT))
+        self.assertIn("mood_ignore_codex_notice", event.get_extra(EVENT_HINT))
+        ordinary = FakeEvent("b", "陪我聊会儿")
+        await self.plugin.apply_mood(ordinary, ProviderRequest(prompt=ordinary.message))
+        self.assertNotIn("astrbot_codex_notice_agency", ordinary.get_extra(EVENT_HINT))
+        await self.settle()
+
+    async def test_notice_refusal_can_be_disabled_without_disabling_emotion(self):
+        self.plugin.config["allow_codex_notice_refusal"] = False
+        event = FakeEvent("a", "任务完成")
+        event.set_extra("codex_bridge", {"kind": "task_result"})
+        await self.plugin.apply_mood(event, ProviderRequest(prompt="任务完成"))
+        self.assertNotIn("astrbot_codex_notice_agency", event.get_extra(EVENT_HINT))
+        self.assertIn("保持对话回应", event.get_extra(EVENT_HINT))
+        self.assertFalse(self.plugin.can_decline_notice(event))
+        await self.settle()
+
     async def test_different_conversations_and_personas_share_one_state(self):
         first, second = FakeEvent("wechat:private:a"), FakeEvent("qq:group:b")
         await self.plugin.apply_mood(first, ProviderRequest(prompt="你真讨厌"))
