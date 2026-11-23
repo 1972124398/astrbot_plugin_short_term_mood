@@ -1,0 +1,73 @@
+{
+  "enabled": {
+    "description": "启用共享短期情绪",
+    "type": "bool",
+    "default": true
+  },
+  "analysis_provider_id": {
+    "description": "情绪评估模型 Provider ID",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用当前会话的聊天模型。每轮会额外调用一次，用于评估刺激，首次还会生成该人格的情绪表达提示。"
+  },
+  "analyze_images": {
+    "description": "评估当前消息中的图片或表情",
+    "type": "bool",
+    "default": true,
+    "hint": "每轮最多向评估模型传入两张图片。开启时请选用支持视觉输入的评估模型。"
+  },
+  "analysis_timeout_seconds": {
+    "description": "单轮情绪评估超时秒数",
+    "type": "int",
+    "default": 15,
+    "hint": "有效范围 1 到 120。失败后冷却 30 秒再尝试，已有情绪继续自然恢复。"
+  },
+  "half_life_seconds": {
+    "description": "情绪强度减半所需秒数",
+    "type": "int",
+    "default": 300,
+    "hint": "默认 5 分钟减半。有效范围 10 到 86400。"
+  },
+  "recovery_seconds": {
+    "description": "单种情绪最后一次明显刺激后的最长持续秒数",
+    "type": "int",
+    "default": 1200,
+    "hint": "默认 20 分钟恢复平稳。普通聊天和安慰会继续衰减，新的明显同类刺激会重新计时。有效范围 30 到 86400。"
+  },
+  "sensitivity": {
+    "description": "情绪敏感度",
+    "type": "float",
+    "default": 1.0,
+    "hint": "范围 0.1 到 2，越高越容易受互动影响。"
+  },
+  "enable_refusal": {
+    "description": "允许情绪性婉拒",
+    "type": "bool",
+    "default": true,
+    "hint": "负面情绪较强且当前话题适合婉拒时，按概率允许角色表达暂时不想继续或需要休息。仍经正常回复流程生成。"
+  },
+  "refusal_threshold": {
+    "description": "婉拒所需的主导负面情绪强度",
+    "type": "float",
+    "default": 0.65,
+    "hint": "范围 0.1 到 1。"
+  },
+  "refusal_probability": {
+    "description": "婉拒基础概率",
+    "type": "float",
+    "default": 0.3,
+    "hint": "范围 0 到 1。实际概率为此数值乘以当前主导情绪强度。连续两次有效对话最多允许一次婉拒。"
+  },
+  "refusal_cooldown_seconds": {
+    "description": "两次情绪性婉拒的最短间隔秒数",
+    "type": "int",
+    "default": 180,
+    "hint": "所有会话共享冷却，默认 3 分钟。范围 0 到 86400。"
+  },
+  "command_prefixes": {
+    "description": "跳过情绪处理的命令前缀",
+    "type": "list",
+    "default": ["/", "!"],
+    "hint": "按用户原始消息识别前缀，避免命令改变情绪。可与其他插件的命令格式保持一致。"
+  }
+}
