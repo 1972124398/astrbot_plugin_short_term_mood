@@ -80,31 +80,36 @@
     "hint": "范围 0.1 到 2，越高越容易受互动影响。"
   },
   "enable_refusal": {
-    "description": "允许情绪性婉拒",
+    "description": "允许自主表达不愿意或拒绝",
     "type": "bool",
     "default": true,
-    "hint": "负面情绪较强时，按概率向当前回复提供有条件的婉拒提示，由聊天模型结合当前请求判断。认真求助、工具和工作任务要求正常处理。"
+    "hint": "角色可依据人格、心境和当前语境直接表达不满、争辩、反问、转开话题或拒绝继续。是否发生由对话决定。关闭后仍保留情绪表达。"
   },
-  "refusal_threshold": {
-    "description": "婉拒所需的主导负面情绪强度",
+  "expression_strength": {
+    "description": "情绪表达鲜明程度",
     "type": "float",
-    "default": 0.65,
-    "slider": {"min": 0.1, "max": 1.0, "step": 0.01},
-    "hint": "范围 0.1 到 1。"
+    "default": 1.0,
+    "slider": {"min": 0.1, "max": 2.0, "step": 0.1},
+    "hint": "调节心境在说话中的表现。较低值更含蓄，较高值情绪更明显，适合希望角色更有脾气、更热情或更活泼的场景。"
   },
-  "refusal_probability": {
-    "description": "婉拒基础概率",
+  "emotion_inertia": {
+    "description": "情绪余韵与惯性",
     "type": "float",
-    "default": 0.3,
-    "slider": {"min": 0.0, "max": 1.0, "step": 0.01},
-    "hint": "范围 0 到 1。实际概率为此数值乘以当前主导情绪强度。连续两次有效对话最多允许一次婉拒。"
+    "default": 0.35,
+    "slider": {"min": 0.0, "max": 0.9, "step": 0.05},
+    "hint": "已有的强烈情绪在被安抚或转变时会有余韵。越高越需要一个逐渐缓和的过程，0 表示直接使用检测模型给出的变化幅度。自然恢复时间由原来的时间配置决定。"
   },
-  "refusal_cooldown_seconds": {
-    "description": "两次情绪性婉拒的最短间隔秒数",
-    "type": "int",
-    "default": 180,
-    "slider": {"min": 0, "max": 86400, "step": 1},
-    "hint": "所有会话共享冷却，默认 3 分钟。范围 0 到 86400。"
+  "react_to_current_message": {
+    "description": "允许对当前消息即时表达情绪",
+    "type": "bool",
+    "default": true,
+    "hint": "聊天模型可结合当前消息立即表现开心、委屈、不满、害羞等反应，后台持续维护跨会话心境。前台无需等待后台检测。"
+  },
+  "expression_preferences": {
+    "description": "补充情绪表达偏好",
+    "type": "text",
+    "default": "",
+    "hint": "可填写如：生气时直接说出来，亲近时多逗趣，少写动作描写。会结合主提示词自动生成人格表达。修改后下次后台检测会生成新提示。"
   },
   "profile_cache_seconds": {
     "description": "人格情绪表达提示的缓存时间秒数",

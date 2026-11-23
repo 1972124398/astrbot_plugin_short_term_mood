@@ -17,8 +17,10 @@ EMOTIONS = {
     "anxiety": "不安",
     "fatigue": "疲惫",
     "curiosity": "好奇",
+    "embarrassment": "害羞",
+    "pride": "得意",
+    "grievance": "委屈",
 }
-NEGATIVE = {"anger", "sadness", "anxiety", "fatigue"}
 EPSILON = 0.04
 
 
@@ -36,10 +38,10 @@ class MoodState:
     levels: dict[str, float] = field(default_factory=dict)
     stimulated: dict[str, float] = field(default_factory=dict)
     updated: float = 0.0
-    last_refusal: float = 0.0
-    refused_previous: bool = False
     last_interaction: float = 0.0
     recovery_ages: dict[str, float] = field(default_factory=dict)
+    inner_state: str = ""
+    response_tendency: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> MoodState:
@@ -56,14 +58,14 @@ class MoodState:
             levels=levels,
             stimulated=stimulated,
             updated=finite_number(data.get("updated", 0)),
-            last_refusal=finite_number(data.get("last_refusal", 0)),
-            refused_previous=data.get("refused_previous") is True,
             last_interaction=finite_number(data.get("last_interaction", 0)),
             recovery_ages={
                 name: max(0.0, finite_number(value))
                 for name, value in data.get("recovery_ages", {}).items()
                 if name in levels
             },
+            inner_state=str(data.get("inner_state") or "")[:160],
+            response_tendency=str(data.get("response_tendency") or "")[:160],
         )
 
     def as_dict(self) -> dict:
@@ -71,10 +73,10 @@ class MoodState:
             "levels": self.levels,
             "stimulated": self.stimulated,
             "updated": self.updated,
-            "last_refusal": self.last_refusal,
-            "refused_previous": self.refused_previous,
             "last_interaction": self.last_interaction,
             "recovery_ages": self.recovery_ages,
+            "inner_state": self.inner_state,
+            "response_tendency": self.response_tendency,
         }
 
     def recover(self, now: float, half_life: float, recovery_seconds: float, idle_seconds: float = 0) -> None:
@@ -94,10 +96,15 @@ class MoodState:
                 self.levels[name] = value
                 self.recovery_ages[name] = age
         self.updated = max(self.updated, now)
+        if not self.levels:
+            self.inner_state = ""
+            self.response_tendency = ""
 
-    def apply(self, deltas: dict[str, float], now: float, sensitivity: float) -> None:
+    def apply(self, deltas: dict[str, float], now: float, sensitivity: float, inertia: float = 0) -> None:
         for name, delta in deltas.items():
             change = min(0.35, max(-0.35, delta)) * sensitivity
+            if change < 0:
+                change *= 1 - inertia * self.levels.get(name, 0.0)
             value = min(1.0, max(0.0, self.levels.get(name, 0.0) + change))
             if value < EPSILON:
                 self.levels.pop(name, None)
@@ -109,37 +116,6 @@ class MoodState:
             if change >= EPSILON:
                 self.stimulated[name] = now
                 self.recovery_ages[name] = 0.0
-
-    def dominant(self) -> tuple[str, float]:
-        return max(self.levels.items(), key=lambda item: item[1], default=("neutral", 0.0))
-
-    def choose_refusal(
-        self,
-        now: float,
-        *,
-        allowed: bool,
-        enabled: bool,
-        threshold: float,
-        probability: float,
-        cooldown: float,
-        draw: float,
-    ) -> bool:
-        name, strength = self.dominant()
-        chance = probability * strength
-        refuse = (
-            enabled
-            and allowed
-            and name in NEGATIVE
-            and strength >= threshold
-            and not self.refused_previous
-            and (self.last_refusal == 0 or now - self.last_refusal >= cooldown)
-            and draw < chance
-        )
-        self.refused_previous = refuse
-        if refuse:
-            self.last_refusal = now
-        return refuse
-
 
 class MoodStore:
     """One shared state and a bounded cache of persona-derived expression profiles."""

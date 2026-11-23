@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +32,7 @@ class AppraisalJob:
     images: list[str]
     proactive: bool
     queued_at: float
+    preferences: str
 
 
 class ShortTermMoodPlugin(Star):
@@ -151,7 +151,8 @@ class ShortTermMoodPlugin(Star):
     def snapshot(self, event: AstrMessageEvent, request: ProviderRequest) -> AppraisalJob:
         persona = self.persona_prompt(event, request)
         provider_id = str(self.config.get("analysis_provider_id", "") or "").strip()
-        key = hashlib.sha256(json.dumps(["v2", persona, provider_id, request.model], ensure_ascii=False).encode()).hexdigest()
+        preferences = str(self.config.get("expression_preferences", "") or "")[:2000]
+        key = hashlib.sha256(json.dumps(["v3", persona, provider_id, request.model, preferences], ensure_ascii=False).encode()).hexdigest()
         message_id = getattr(getattr(event, "message_obj", None), "message_id", "")
         proactive = str(message_id).startswith("proactive:")
         return AppraisalJob(
@@ -165,6 +166,7 @@ class ShortTermMoodPlugin(Star):
             images=list(request.image_urls or [])[:2] if self.config.get("analyze_images", True) and not proactive else [],
             proactive=proactive,
             queued_at=time.monotonic(),
+            preferences=preferences,
         )
 
     def enqueue(self, job: AppraisalJob):
@@ -189,9 +191,13 @@ class ShortTermMoodPlugin(Star):
     async def appraise(self, job: AppraisalJob):
         provider_id = job.provider_id or await self.context.get_current_chat_provider_id(job.origin)
         profiles = self.cached_profile(job.key)
+        state = self.read_state()
         payload = {
             "persona": job.persona,
-            "current_mood": dict(self.read_state().levels),
+            "current_mood": dict(state.levels),
+            "previous_inner_state": state.inner_state,
+            "previous_response_tendency": state.response_tendency,
+            "expression_preferences": job.preferences,
             "event_kind": "proactive" if job.proactive else "dialogue",
             "recent_dialogue": job.recent,
             "current_input": job.prompt,
@@ -204,19 +210,30 @@ class ShortTermMoodPlugin(Star):
             prompt=json.dumps(payload, ensure_ascii=False),
             image_urls=job.images,
         )
-        deltas, generated = parse_appraisal(response.completion_text, profiles is None)
-        return ({} if job.proactive else deltas), generated
+        deltas, generated, inner_state, tendency = parse_appraisal(response.completion_text, profiles is None)
+        if job.proactive:
+            return {}, generated, "", ""
+        return deltas, generated, inner_state, tendency
 
     async def process_job(self, job: AppraisalJob):
         if not self.job_current(job) or time.monotonic() < self.retry_after:
             return
         async with asyncio.timeout(self.number("analysis_timeout_seconds", 15, 1, 120)):
-            deltas, generated = await self.appraise(job)
+            deltas, generated, inner_state, tendency = await self.appraise(job)
         # A reset, manual change, reload, or stale queue entry invalidates late results.
         if not self.job_current(job):
             return
         state = self.read_state()
-        state.apply(deltas, time.time(), self.number("sensitivity", 1.0, 0.1, 2.0))
+        state.apply(
+            deltas, time.time(), self.number("sensitivity", 1.0, 0.1, 2.0),
+            self.number("emotion_inertia", 0.35, 0, 0.9),
+        )
+        if state.levels:
+            state.inner_state = inner_state or state.inner_state
+            state.response_tendency = tendency or state.response_tendency
+        else:
+            state.inner_state = ""
+            state.response_tendency = ""
         self.schedule_save()
         if generated is not None:
             created = time.time()
@@ -259,16 +276,15 @@ class ShortTermMoodPlugin(Star):
             state = self.read_state()
             if not job.proactive:
                 state.last_interaction = time.time()
-            refuse = state.choose_refusal(
-                time.time(),
-                allowed=not job.proactive,
-                enabled=bool(self.config.get("enable_refusal", True)),
-                threshold=self.number("refusal_threshold", 0.65, 0.1, 1.0),
-                probability=self.number("refusal_probability", 0.3, 0, 1),
-                cooldown=self.number("refusal_cooldown_seconds", 180, 0, 86400),
-                draw=random.random(),
+            hint = build_hint(
+                state.levels, self.cached_profile(job.key),
+                bool(self.config.get("enable_refusal", True)),
+                expression_strength=self.number("expression_strength", 1.0, 0.1, 2.0),
+                inner_state=state.inner_state,
+                response_tendency=state.response_tendency,
+                immediate_reaction=bool(self.config.get("react_to_current_message", True)) and not job.proactive,
+                preferences=job.preferences,
             )
-            hint = build_hint(state.levels, self.cached_profile(job.key), refuse)
             event.set_extra(EVENT_HINT, hint)
             self.schedule_save()
             self.enqueue(job)
@@ -282,7 +298,12 @@ class ShortTermMoodPlugin(Star):
         levels = sorted(state.levels.items(), key=lambda item: item[1], reverse=True)
         self.schedule_save()
         description = "、".join(f"{EMOTIONS[name]} {value:.0%}" for name, value in levels) or "平稳"
-        yield event.plain_result(f"当前共享心境为{description}。情绪会随时间自动恢复。")
+        details = [f"当前共享心境为{description}。"]
+        if state.inner_state:
+            details.append(f"情绪余韵　{state.inner_state}")
+        if state.response_tendency:
+            details.append(f"互动倾向　{state.response_tendency}")
+        yield event.plain_result("\n".join(details))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("mood_reset")
@@ -304,7 +325,7 @@ class ShortTermMoodPlugin(Star):
             if name not in EMOTIONS or not 0.04 <= value <= 1.0:
                 raise ValueError("Invalid mood setting")
         except ValueError:
-            yield event.plain_result("用法 /mood_set <joy|affection|sadness|anger|anxiety|fatigue|curiosity> [0.04～1]，也支持中文情绪名。")
+            yield event.plain_result(f"用法 /mood_set <{'|'.join(EMOTIONS)}> [0.04～1]，也支持中文情绪名。")
             return
         self.invalidate_pending()
         now = time.time()

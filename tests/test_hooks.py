@@ -50,7 +50,8 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         self.appraisal = {
             "deltas": {"anger": 0.3},
             "confidence": 0.9,
-            "allow_refusal": True,
+            "inner_state": "有点不满，还愿意说清楚",
+            "response_tendency": "想直接表达感受",
             "profiles": {name: f"以角色口吻表现{name}" for name in {"neutral", *EMOTIONS}},
         }
         self.context = SimpleNamespace(
@@ -163,18 +164,17 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("生气", event.get_extra(EVENT_HINT))
         self.assertLessEqual(self.plugin.store.load().levels["anger"], 0.3)
 
-    async def test_refusal_policy_is_only_a_temporary_hint(self):
+    async def test_emotional_agency_is_available_across_successive_turns(self):
         import time
 
         now = time.time()
         self.plugin.state = MoodState({"anger": 1}, {"anger": now}, updated=now)
-        self.plugin.config.update({"refusal_probability": 1, "refusal_cooldown_seconds": 0})
-        with patch("astrbot_plugin_short_term_mood.main.random.random", return_value=0):
-            first, second = FakeEvent("a"), FakeEvent("b")
-            await self.plugin.apply_mood(first, ProviderRequest(prompt="刺激"))
-            await self.plugin.apply_mood(second, ProviderRequest(prompt="刺激"))
-        self.assertIn("本轮允许短暂婉拒", first.get_extra(EVENT_HINT))
-        self.assertIn("本轮保持回应意愿", second.get_extra(EVENT_HINT))
+        first, second = FakeEvent("a"), FakeEvent("b")
+        await self.plugin.apply_mood(first, ProviderRequest(prompt="刺激"))
+        await self.plugin.apply_mood(second, ProviderRequest(prompt="刺激"))
+        self.assertIn("直接拒绝", first.get_extra(EVENT_HINT))
+        self.assertIn("直接拒绝", second.get_extra(EVENT_HINT))
+        self.assertNotIn("本轮保持回应意愿", second.get_extra(EVENT_HINT))
 
     async def test_slow_background_model_does_not_block_any_frontend_conversation(self):
         started, release = asyncio.Event(), asyncio.Event()
@@ -330,12 +330,23 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         payloads = [json.loads(call.kwargs["prompt"]) for call in self.context.llm_generate.call_args_list]
         self.assertEqual([payload["current_input"] for payload in payloads], ["第一条", "最新"])
 
-    async def test_old_refusal_eligibility_is_never_reused_for_another_request(self):
+    async def test_emotion_changes_both_tone_and_interaction_intent(self):
         from astrbot_plugin_short_term_mood.prompts import build_hint
 
-        hint = build_hint({"anger": 0.9}, None, True)
-        self.assertIn("当前请求判断", hint)
-        self.assertIn("工具", hint)
+        hint = build_hint({"anger": 0.9}, None, True, inner_state="仍有余气", response_tendency="想反问一句")
+        self.assertIn("仍有余气", hint)
+        self.assertIn("想反问一句", hint)
+        self.assertIn("反问、争辩", hint)
+
+    async def test_background_feeling_and_intent_shape_next_turn(self):
+        await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="刺激"))
+        await self.settle()
+        next_event = FakeEvent("b")
+        await self.plugin.apply_mood(next_event, ProviderRequest(prompt="你好"))
+        hint = next_event.get_extra(EVENT_HINT)
+        self.assertIn(self.appraisal["inner_state"], hint)
+        self.assertIn(self.appraisal["response_tendency"], hint)
+        await self.settle()
 
     async def test_native_configuration_schema_preserves_existing_settings(self):
         from astrbot.api import AstrBotConfig
