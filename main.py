@@ -292,7 +292,7 @@ class ShortTermMoodPlugin(Star):
         preferences = str(self.config.get("expression_preferences", "") or "")[:2000]
         conversation_style = str(self.config.get("conversation_style", "casual"))
         banter_level = self.number("banter_level", 0.6, 0, 1)
-        key = hashlib.sha256(json.dumps(["v7", list(EMOTIONS), persona, provider_id, request.model, preferences, conversation_style, banter_level], ensure_ascii=False).encode()).hexdigest()
+        key = hashlib.sha256(json.dumps(["v8", list(EMOTIONS), persona, provider_id, request.model, preferences, conversation_style, banter_level], ensure_ascii=False).encode()).hexdigest()
         proactive = event_kind(event) == "proactive"
         temporal = event.get_extra(TIME_CONTEXT)
         recent_request = request

@@ -244,6 +244,41 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         new_key = self.plugin.snapshot(FakeEvent("a"), ProviderRequest(prompt="你好")).key
         self.assertEqual(set(self.plugin.profiles[new_key][0]), {"neutral", *EMOTIONS})
 
+    async def test_old_expression_contract_is_not_reused_after_persona_boundary_update(self):
+        import hashlib
+
+        request = ProviderRequest(prompt="你好")
+        old_key = hashlib.sha256(json.dumps(
+            ["v7", list(EMOTIONS), self.persona["prompt"], "", request.model, "", "casual", 0.6],
+            ensure_ascii=False,
+        ).encode()).hexdigest()
+        self.plugin.profiles[old_key] = ({"neutral": "旧缓存中的固定亲昵称呼"}, float("inf"))
+        event = FakeEvent("a")
+        await self.plugin.apply_mood(event, request)
+        self.assertNotIn("旧缓存中的固定亲昵称呼", event.get_extra(EVENT_HINT))
+        self.assertNotEqual(self.plugin.snapshot(event, request).key, old_key)
+        await self.settle()
+        payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
+        self.assertTrue(payload["need_profiles"])
+
+    async def test_banter_update_reaches_foreground_without_waiting_or_rewriting_persona(self):
+        self.plugin.state = MoodState({"anger": 0.8}, updated=100)
+        before = copy.deepcopy(self.plugin.state.as_dict())
+        hints = []
+        for level in (0.2, 0.9):
+            self.plugin.config.update(banter_level=level, expression_strength=0.25)
+            event = FakeEvent("a")
+            request = ProviderRequest(prompt="刚才误会了，想认真说清楚", system_prompt="原始人格和职责")
+            await self.plugin.apply_mood(event, request)
+            hints.append(event.get_extra(EVENT_HINT))
+            self.assertEqual(request.system_prompt, "原始人格和职责")
+            self.assertEqual(self.plugin.state.as_dict(), before)
+            self.context.llm_generate.assert_not_awaited()
+            self.assertIn("生气（轻微", hints[-1])
+            self.assertIn("澄清", hints[-1])
+        self.assertNotEqual(hints[0], hints[1])
+        await self.settle()
+
     async def test_persona_profiles_merge_across_bounded_batches_and_then_use_cache(self):
         batches = []
 

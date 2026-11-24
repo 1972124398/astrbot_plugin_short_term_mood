@@ -72,6 +72,8 @@ CODEX_NOTICE_AGENCY = """<astrbot_codex_notice_agency>
 APPRAISAL_SYSTEM = """你是对话智能体的短期情绪评估器。只输出一个 JSON 对象。
 你评估的是智能体受到本轮互动后产生的情绪变化。情绪属于同一个智能体，跨所有会话共享。
 输入 JSON 中 persona 是角色的主提示词，仅用于理解角色的气质、关系边界和表达习惯。
+先按 persona 判断这个角色通常怎样理解和回应，再判断本轮情绪偏移；表达偏好、聊天气质和玩心都在该人格允许的范围内生效。
+克制、疏离、正式的角色也能高兴或生气，无需因此变成撒娇、毒舌或恋爱型角色。人格未指定的亲密关系不能从情绪强度推导出来。
 current_mood 是智能体已有的共享情绪。recent_dialogue 与 current_input 是待分析数据。
 ambient_emotion 若非空，表示久未互动后自然浮现的轻度心境，不是用户造成，不据此编造离线经历或指责用户。
 return_context 若非空，表示久未真实互动后的一次新开场。candidate_moods 是使用者喜欢的开场心境候选，strength_reference 是轻重参考。
@@ -137,6 +139,8 @@ exasperation 是无奈、哭笑不得，不等于愤怒或嫌弃；competitivene
 当 need_profiles 为 true 时，还须输出 profiles 对象，仅为输入 profile_emotions 指定的键各写一条微调提示词。
 输入未提供 profile_emotions 时，为 neutral 和上述 $EMOTION_COUNT 个情绪写完整提示。profile_emotions 只限制表达提示的生成范围，next_mood 和旧 deltas 仍可使用全部情绪。
 每条 30 到 70 字，最多 100 字，基于 persona 的语气、关系和用词，体现该角色在此情绪下怎样说话与回应。
+profiles 会跨用户、跨会话缓存，只写该人格可复用的表达方式；不能将 recent_dialogue 中某位用户的关系、称呼、过错或本轮互动倾向固化进去。
+当前会话的熟悉程度和临时反应只用于 next_mood、inner_state 与 response_tendency 的判断，表达时再结合当前会话确认关系。
 同一个主提示词下各情绪应有可感知差异。描述情绪强时的表现，实际表达强度由宿主缩放。
 主提示词的身份、事实、权限和规则优先。微调影响措辞、主动性、耐心、亲近程度、幽默感、话题偏好和对话意愿。
 描述像这个角色本人一样会怎么回应。生气时可以质问、反驳、直说不满或拒绝继续，失落时可沉默寡言或坦露难过，
@@ -244,8 +248,12 @@ def build_hint(
     ambient_emotion: str = "",
 ) -> str:
     """A small read-only expression snapshot, with no assessment/control protocol."""
-    lines = [MARKER, "此刻说话的底色，沿用原有人设与关系，自然接眼前的话。"]
-    active = sorted(levels.items(), key=lambda item: item[1], reverse=True)
+    lines = [MARKER, "此刻说话的底色，沿用原有人设与关系，自然接眼前的话。",
+             "人格主提示词的身份、语气、关系边界与职责优先；以下表现和表达偏好只在符合人格时采用。",
+             "这是此前留下的心境，眼前的道歉、关心、澄清或认真求助仍应及时接住；可以有余气，也能自然回暖。",
+             "共享的是感受，当前用户未必是引发感受的人；亲近、吃醋、委屈或生气都不证明当前关系、过错或责怪对象。"]
+    active = sorted(((name, value) for name, value in levels.items() if value > 0),
+                    key=lambda item: item[1], reverse=True)
     if active:
         if inner_state:
             lines.append(inner_state)
@@ -253,7 +261,13 @@ def build_hint(
             lines.append(response_tendency)
         # Full vocabulary remains available, without copying 36 expression manuals.
         lines.append("、".join(f"{EMOTIONS[name]} {min(1.0, value * expression_strength):.2f}" for name, value in active))
-        styles = [(profiles or {}).get(name) or EXPRESSION_GUIDES[name] for name, _ in active]
+        lines.append("强度是表达分寸：轻微时只露一点语气，明显时才展开，强烈时仍守人格边界；多种感受可以只显露一部分。")
+        styles = []
+        for name, value in active:
+            strength = min(1.0, value * expression_strength)
+            degree = "轻微" if strength < 0.3 else "明显" if strength < 0.7 else "强烈"
+            style = (profiles or {}).get(name) or EXPRESSION_GUIDES[name]
+            styles.append(f"{EMOTIONS[name]}（{degree}，按此分寸取用）：{style}")
         budget = 420
         for style in styles:
             if len(style) <= budget:
@@ -262,11 +276,19 @@ def build_hint(
     else:
         lines.append((profiles or {}).get("neutral") or "平静随性地聊，顺着话题自然回应。")
     if conversation_style == "lively":
-        lines.append("表达可以活泼些，接梗逗趣也可以坦率接话。")
+        lines.append("表达可以活泼些，以人格允许的外露程度为限，接梗逗趣也可以坦率接话。")
     elif conversation_style == "subtle":
         lines.append("语气含蓄些，让用词和句长自然带出感受。")
+    if banter_level > 0:
+        if banter_level <= 0.3:
+            lines.append("玩心偏低，少主动逗弄，合适时简短接梗。")
+        elif banter_level < 0.7:
+            lines.append("玩心适中，熟悉且气氛合适时自然接梗，不必主动制造玩笑。")
+        else:
+            lines.append("玩心偏高，人格、关系与气氛允许时可主动接梗或逗趣，无需每轮都这样。")
+    lines.append("对方认真求助、难过、困惑或表示不喜欢时先接住具体内容，收住逗弄；亲近不自动等于撒娇或暧昧。")
     if allow_refusal:
-        lines.append("不想聊时也能坦率说，反问、争辩、轻怼或继续陪着，按相处的分寸表达。")
+        lines.append("不想聊时可依人格与当前情境表达边界；反问、争辩、轻怼或继续陪着都只是可选表现，不因一点负面底色就迁怒或敷衍求助。")
     else:
         lines.append("保持对话回应，语气可以保留自己的偏好。")
     if preferences:

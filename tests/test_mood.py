@@ -82,6 +82,39 @@ class MoodTests(unittest.TestCase):
         self.assertIn("想先听听，也可以给个台阶", hint)
         self.assertNotIn("混合心境的一种自然表现", hint)
 
+    def test_expression_strength_scales_each_guide_without_changing_shared_mood(self):
+        levels = {"anger": 0.8, "tenderness": 0.01, "joy": 0.0}
+        profiles = {"anger": "以克制的措辞表达不满", "tenderness": "简短接住好意"}
+        quiet = build_hint(levels, profiles, True, expression_strength=0.25)
+        strong = build_hint(levels, profiles, True, expression_strength=2.0)
+        self.assertIn("生气 0.20", quiet)
+        self.assertIn("生气（轻微", quiet)
+        self.assertIn("生气 1.00", strong)
+        self.assertIn("生气（强烈", strong)
+        for hint in (quiet, strong):
+            self.assertIn("心软（轻微", hint)
+            self.assertIn(profiles["anger"], hint)
+            self.assertIn(profiles["tenderness"], hint)
+            self.assertNotIn("开心 0.00", hint)
+        self.assertEqual(levels, {"anger": 0.8, "tenderness": 0.01, "joy": 0.0})
+
+    def test_expression_budget_includes_intensity_labels_and_preserves_full_summary(self):
+        profiles = dict.fromkeys(EMOTIONS, "人格表达" * 70)
+        hint = build_hint(dict.fromkeys(EMOTIONS, 0.5), profiles, False)
+        guides = [line for line in hint.splitlines() if "（明显，按此分寸取用）：" in line]
+        self.assertTrue(guides)
+        self.assertLessEqual(sum(map(len, guides)), 420)
+        for label in EMOTIONS.values():
+            self.assertIn(f"{label} 0.50", hint)
+
+    def test_banter_preference_changes_hint_and_zero_keeps_persona_free(self):
+        hints = [build_hint({}, None, False, banter_level=value) for value in (0, 0.2, 0.6, 1)]
+        self.assertEqual(len(set(hints)), 4)
+        self.assertFalse(any(word in hints[0] for word in ("玩心偏低", "玩心适中", "玩心偏高")))
+        for hint, phrase in zip(hints[1:], ("少主动逗弄", "不必主动制造玩笑", "可主动接梗或逗趣")):
+            self.assertIn(phrase, hint)
+            self.assertIn("先接住具体内容", hint)
+
     def test_positive_mixed_undertones_do_not_prevent_soothing_real_conflict(self):
         state = MoodState({"anger": 0.6, "grievance": 0.4}, {"anger": 100, "grievance": 100}, updated=100)
         state.apply({"anger": -0.2, "grievance": -0.15, "tenderness": 0.2, "relief": 0.15}, 101, 1, inertia=0.35)
