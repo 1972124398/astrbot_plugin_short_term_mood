@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,12 @@ source = Path(sys.argv[2]).resolve()
 destination = root / "data/plugins/astrbot_plugin_short_term_mood"
 destination.parent.mkdir(parents=True)
 shutil.copytree(source, destination, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv", "data"))
+archive = Path(sys.argv[3]) if len(sys.argv) > 3 else None
+if archive:
+    metadata_path = destination / "metadata.yaml"
+    metadata_text = metadata_path.read_text(encoding="utf-8")
+    metadata_path.write_text("\n".join("version: 0.11.1" if line.startswith("version:") else line
+                                      for line in metadata_text.splitlines()) + "\n", encoding="utf-8")
 os.environ["ASTRBOT_ROOT"] = str(root)
 sys.path.insert(0, str(root))
 
@@ -72,13 +79,28 @@ async def main():
     assert plugin.star_cls is not None and plugin.activated
     assert plugin.config is not None and plugin.config["enabled"] is True
     assert plugin.config.schema["analysis_provider_id"]["_special"] == "select_provider"
+    upgraded = False
+    if archive:
+        with zipfile.ZipFile(archive) as bundle:
+            expected = bundle.read("astrbot_plugin_short_term_mood/metadata.yaml").decode("utf-8")
+        plugin.star_cls.state.levels = {"joy": 0.37}
+        plugin.star_cls.store.save(plugin.star_cls.state)
+        plugin.config.save_config({"expression_strength": 0.55})
+        await core.plugin_manager.install_plugin_from_file(str(archive))
+        plugin = core.star_context.get_registered_star("astrbot_plugin_short_term_mood")
+        assert plugin and plugin.activated and plugin.star_cls
+        assert plugin.star_cls.state.levels == {"joy": 0.37}
+        assert plugin.config["expression_strength"] == 0.55
+        assert (destination / "metadata.yaml").read_text(encoding="utf-8").splitlines() == expected.splitlines()
+        assert destination.is_dir() and not destination.is_symlink() and not destination.is_junction()
+        upgraded = True
     success, message = await core.plugin_manager.reload(plugin.name)
     assert success, message
     await core.stop()
     assert sentinels == {path: fingerprint(path) for path in sentinels}
     assert database_opens and set(database_opens) == {"mood.sqlite3"}
     print(json.dumps({"installed": True, "configured": True, "hot_reloaded": success,
-                      "other_plugin_data_unchanged": True, "databases": database_opens}))
+                      "other_plugin_data_unchanged": True, "archive_upgrade": upgraded, "databases": database_opens}))
 
 
 asyncio.run(main())

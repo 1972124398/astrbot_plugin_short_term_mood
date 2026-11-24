@@ -10,7 +10,7 @@
 </p>
 
 <p>
-  <a href="https://github.com/1972124398/astrbot_plugin_short_term_mood/releases/latest/download/astrbot_plugin_short_term_mood.zip"><strong>下载 ZIP</strong></a> ·
+  <a href="https://github.com/1972124398/astrbot_plugin_short_term_mood/releases/latest"><strong>下载 ZIP</strong></a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="docs/CONFIGURATION.md">配置文档</a> ·
   <a href="https://github.com/1972124398/astrbot_plugin_short_term_mood/issues/new/choose">问题反馈</a>
@@ -162,3 +162,7 @@ https://github.com/1972124398/astrbot_plugin_short_term_mood
 ## Codex 发给它的内部报告
 
 用户还没有看到 Codex 的原始报告。它可以结合人格与心情决定是否告诉用户，也可以先不理；任务与结果继续保留。查看[内部收件与情绪回应](docs/MESSAGE_FLOW.md)。
+
+### Windows 旧开发目录覆盖安装失败
+
+上传 ZIP 时若出现 `Cannot call rmtree on a symbolic link`，说明旧插件目录是 Junction／目录链接，AstrBot 在加载插件之前就无法替换目录。需要先将该目录链接恢复为普通插件目录，再安装 ZIP；不要删除链接指向的源码仓库或插件数据目录。正常通过 ZIP 安装的目录无需处理。0.11.2 已补充旧版 ZIP 覆盖升级、配置和心情保留的实际安装测试。
