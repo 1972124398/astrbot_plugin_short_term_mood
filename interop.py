@@ -63,13 +63,13 @@ def task_history(message):
 
 
 def human_dialogue(messages):
-    """Exclude task events and their reports from social/emotional appraisal."""
+    """Exclude internal reports and synthetic summaries from emotional appraisal."""
     result, in_task = [], False
     for message in messages:
         if not isinstance(message, dict):
             continue
         if message.get("role") == "user":
-            in_task = task_history(message)
+            in_task = task_history(message) or message_text(message).startswith("<self_cognition_history>")
         if not in_task:
             result.append(message)
     return result

@@ -46,6 +46,13 @@ class InteropTests(unittest.TestCase):
                    {"role": "user", "content": "辛苦啦"}]
         self.assertEqual(module.human_dialogue(history), history[:2] + history[-1:])
 
+    def test_cognition_summary_is_old_material_not_a_new_emotional_stimulus(self):
+        summary = [{"role": "user", "content": '<self_cognition_history>{"facts":["过去的争执"]}</self_cognition_history>'},
+                   {"role": "assistant", "content": "已知悉摘要"}]
+        fresh = [{"role": "user", "content": "早上好"}, {"role": "assistant", "content": "早呀"}]
+        self.assertEqual(module.human_dialogue(summary + fresh), fresh)
+        self.assertFalse(module.task_history(summary[0]))  # It is not a Codex task report either.
+
     def setUp(self):
         self.registry = {}
         self.context = SimpleNamespace(get_registered_star=self.registry.get, get_config=lambda **_: {"plugin_set": ["*"]})
