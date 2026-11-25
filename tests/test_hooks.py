@@ -81,9 +81,13 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
             await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="刚才是我不好"))
             await self.settle()
             self.assertEqual(self.plugin.state.levels, self.appraisal["next_mood"])
-            self.assertEqual(self.plugin.store.load().levels, self.appraisal["next_mood"])
-            event = FakeEvent("b")
-            await self.plugin.apply_mood(event, ProviderRequest(prompt="现在想聊点什么？"))
+            self.assertEqual(
+                self.plugin.store.load().levels, self.appraisal["next_mood"]
+            )
+            event = FakeEvent("a")
+            await self.plugin.apply_mood(
+                event, ProviderRequest(prompt="现在想聊点什么？")
+            )
             self.assertIn("气已经消了些，还想听听", event.get_extra(EVENT_HINT))
             await self.settle()
 
@@ -479,12 +483,12 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
     async def test_persona_cache_regenerates_when_main_prompt_changes(self):
         await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="你好"))
         await self.settle()
-        await self.plugin.apply_mood(FakeEvent("b"), ProviderRequest(prompt="你好"))
+        await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="你好"))
         await self.settle()
         payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
         self.assertFalse(payload["need_profiles"])
         self.persona = {"prompt": "新主提示词"}
-        await self.plugin.apply_mood(FakeEvent("c"), ProviderRequest(prompt="你好"))
+        await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="你好"))
         await self.settle()
         payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
         self.assertTrue(payload["need_profiles"])
@@ -492,7 +496,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
     async def test_proactive_chat_uses_shared_mood_without_inventing_stimuli(self):
         await self.plugin.apply_mood(FakeEvent("private:a"), ProviderRequest(prompt="刺激"))
         await self.settle()
-        event = FakeEvent("private:b", "")
+        event = FakeEvent("private:a", "")
         event.message_obj = SimpleNamespace(message_id="proactive:123")
         await self.plugin.apply_mood(event, ProviderRequest(prompt="主动聊天生成指令"))
         await self.settle()
@@ -677,7 +681,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
     async def test_background_feeling_and_intent_shape_next_turn(self):
         await self.plugin.apply_mood(FakeEvent("a"), ProviderRequest(prompt="刺激"))
         await self.settle()
-        next_event = FakeEvent("b")
+        next_event = FakeEvent("a")
         await self.plugin.apply_mood(next_event, ProviderRequest(prompt="你好"))
         hint = next_event.get_extra(EVENT_HINT)
         self.assertIn(self.appraisal["inner_state"], hint)

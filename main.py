@@ -73,8 +73,11 @@ class ShortTermMoodPlugin(Star):
 
     def companion_snapshot(self, origin=""):
         state = self.read_state()
-        result = {"levels": dict(state.levels), "inner_state": state.inner_state,
-                  "response_tendency": state.response_tendency, "ambient_emotion": state.ambient_emotion}
+        # A peer only supplies an origin, not the resolved persona. Export abstract affect only.
+        result = {
+            "levels": dict(state.levels),
+            "ambient_emotion": state.ambient_emotion,
+        }
         if origin and self.config.get("time_awareness", True):
             moment = self.clocks.sessions.get(conversation_key(origin))
             if moment:
@@ -292,7 +295,22 @@ class ShortTermMoodPlugin(Star):
         preferences = str(self.config.get("expression_preferences", "") or "")[:2000]
         conversation_style = str(self.config.get("conversation_style", "casual"))
         banter_level = self.number("banter_level", 0.6, 0, 1)
-        key = hashlib.sha256(json.dumps(["v8", list(EMOTIONS), persona, provider_id, request.model, preferences, conversation_style, banter_level], ensure_ascii=False).encode()).hexdigest()
+        key = hashlib.sha256(
+            json.dumps(
+                [
+                    "v9-scoped",
+                    str(event.unified_msg_origin),
+                    list(EMOTIONS),
+                    persona,
+                    provider_id,
+                    request.model,
+                    preferences,
+                    conversation_style,
+                    banter_level,
+                ],
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
         proactive = event_kind(event) == "proactive"
         temporal = event.get_extra(TIME_CONTEXT)
         recent_request = request
@@ -342,18 +360,21 @@ class ShortTermMoodPlugin(Star):
         profiles = self.cached_profile(job.key)
         state = self.read_state()
         targets = profile_targets(state.levels, profiles)
+        notes = state.scoped_notes(job.key)
         payload = {
             "persona": job.persona,
             "current_mood": dict(state.levels),
             "ambient_emotion": state.ambient_emotion,
-            "previous_inner_state": state.inner_state,
-            "previous_response_tendency": state.response_tendency,
+            "previous_inner_state": notes["inner_state"],
+            "previous_response_tendency": notes["response_tendency"],
             "expression_preferences": job.preferences,
             "conversation_style": job.conversation_style,
             "banter_level": job.banter_level,
             "sensitivity_preference": self.number("sensitivity", 1.0, 0.1, 2.0),
-            "emotional_inertia_preference": self.number("emotion_inertia", 0.35, 0, 0.9),
-            "feeling_history": [dict(item) for item in state.feeling_history],
+            "emotional_inertia_preference": self.number(
+                "emotion_inertia", 0.35, 0, 0.9
+            ),
+            "feeling_history": notes["feeling_history"],
             "event_kind": job.event_kind,
             "shared_experience": job.experience,
             "time_context": job.time_context,
@@ -403,6 +424,10 @@ class ShortTermMoodPlugin(Star):
                 state.apply(
                     result.deltas, time.time(), sensitivity=1.0, inertia=0,
                 )
+            if state.note_scope != job.key:
+                state.inner_state = state.response_tendency = ""
+                state.feeling_history.clear()
+            state.note_scope = job.key
             state.remember_feeling(result.inner_state, result.tendency)
         self.schedule_save()
         generated = result.profiles
@@ -450,16 +475,17 @@ class ShortTermMoodPlugin(Star):
         if not isinstance(hint, str):
             state = self.read_state()
             job = self.snapshot(event, request)
+            notes = state.scoped_notes(job.key)
             hint = build_hint(
                 state.levels, self.cached_profile(job.key),
                 bool(self.config.get("enable_refusal", True)) and (job.event_kind != "task_event" or self.can_decline_notice(event)),
                 expression_strength=self.number("expression_strength", 1.0, 0.1, 2.0),
-                inner_state=state.inner_state,
-                response_tendency=state.response_tendency,
+                inner_state=notes["inner_state"],
+                response_tendency=notes["response_tendency"],
                 preferences=job.preferences,
                 conversation_style=job.conversation_style,
                 banter_level=job.banter_level,
-                feeling_history=state.feeling_history,
+                feeling_history=notes["feeling_history"],
                 ambient_emotion=state.ambient_emotion,
             )
             if job.event_kind == "task_event" and self.can_decline_notice(event):
@@ -479,10 +505,6 @@ class ShortTermMoodPlugin(Star):
         details = [f"当前共享心境为{description}。"]
         if state.ambient_emotion:
             details.append("心境底色　久未互动后自然浮现，后续会随交流变化。")
-        if state.inner_state:
-            details.append(f"情绪余韵　{state.inner_state}")
-        if state.response_tendency:
-            details.append(f"互动倾向　{state.response_tendency}")
         yield event.plain_result("\n".join(details))
 
     @filter.permission_type(filter.PermissionType.ADMIN)

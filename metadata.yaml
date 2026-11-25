@@ -1,7 +1,7 @@
 name: astrbot_plugin_short_term_mood
 display_name: 短期共享情绪
 desc: 36 种共享心境，情绪的延续、混合与切换由大模型决定，让角色会逗人、笑场、闹别扭、聊入迷，久别后的心情也能自由发挥。
-version: 0.11.3
+version: 0.11.4
 author: W1
 repo: https://github.com/1972124398/astrbot_plugin_short_term_mood
 astrbot_version: ">=4.29.4,<5"

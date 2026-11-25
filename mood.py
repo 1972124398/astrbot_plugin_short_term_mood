@@ -103,6 +103,7 @@ class MoodState:
     response_tendency: str = ""
     feeling_history: list[dict[str, str]] = field(default_factory=list)
     ambient_emotion: str = ""
+    note_scope: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> MoodState:
@@ -117,6 +118,7 @@ class MoodState:
         }
         ambient = data.get("ambient_emotion", "")
         return cls(
+            note_scope=str(data.get("note_scope") or "")[:64],
             levels=levels,
             stimulated=stimulated,
             updated=finite_number(data.get("updated", 0)),
@@ -139,6 +141,7 @@ class MoodState:
 
     def as_dict(self) -> dict:
         return {
+            "note_scope": self.note_scope,
             "levels": self.levels,
             "stimulated": self.stimulated,
             "updated": self.updated,
@@ -179,6 +182,15 @@ class MoodState:
         previous = self.last_interaction
         self.last_interaction = max(previous, now)
         return random_after > 0 and previous > 0 and now - previous >= random_after
+
+    def scoped_notes(self, scope: str) -> dict:
+        if scope and scope == self.note_scope:
+            return {
+                "inner_state": self.inner_state,
+                "response_tendency": self.response_tendency,
+                "feeling_history": [dict(item) for item in self.feeling_history],
+            }
+        return {"inner_state": "", "response_tendency": "", "feeling_history": []}
 
     def remember_feeling(self, feeling: str, tendency: str) -> None:
         if not self.levels:

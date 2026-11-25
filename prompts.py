@@ -139,7 +139,7 @@ exasperation 是无奈、哭笑不得，不等于愤怒或嫌弃；competitivene
 当 need_profiles 为 true 时，还须输出 profiles 对象，仅为输入 profile_emotions 指定的键各写一条微调提示词。
 输入未提供 profile_emotions 时，为 neutral 和上述 $EMOTION_COUNT 个情绪写完整提示。profile_emotions 只限制表达提示的生成范围，next_mood 和旧 deltas 仍可使用全部情绪。
 每条 30 到 70 字，最多 100 字，基于 persona 的语气、关系和用词，体现该角色在此情绪下怎样说话与回应。
-profiles 会跨用户、跨会话缓存，只写该人格可复用的表达方式；不能将 recent_dialogue 中某位用户的关系、称呼、过错或本轮互动倾向固化进去。
+profiles 按会话与人格缓存，只写该人格可复用的表达方式；不能将 recent_dialogue 中某位用户的关系、称呼、过错或本轮互动倾向固化进去。
 当前会话的熟悉程度和临时反应只用于 next_mood、inner_state 与 response_tendency 的判断，表达时再结合当前会话确认关系。
 同一个主提示词下各情绪应有可感知差异。描述情绪强时的表现，实际表达强度由宿主缩放。
 主提示词的身份、事实、权限和规则优先。微调影响措辞、主动性、耐心、亲近程度、幽默感、话题偏好和对话意愿。
