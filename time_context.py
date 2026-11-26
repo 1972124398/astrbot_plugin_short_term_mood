@@ -44,7 +44,9 @@ class ConversationClocks:
 
     def prepare(self, origin, history, prompt, now, fade_seconds, forget_seconds, previous_at=0):
         moment = self.moment(origin)
-        previous = max(moment.get("last_user", 0), moment.get("last_reply", 0)) or previous_at
+        previous = max(moment.get("last_user", 0), moment.get("last_reply", 0))
+        if not previous and not moment.get("break_at"):
+            previous = previous_at
         gap = max(0, now - previous) if previous else None
         dialogue = human_dialogue(history)
         if gap is not None and gap >= forget_seconds:

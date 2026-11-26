@@ -104,6 +104,7 @@ class MoodState:
     feeling_history: list[dict[str, str]] = field(default_factory=list)
     ambient_emotion: str = ""
     note_scope: str = ""
+    note_origin: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> MoodState:
@@ -119,6 +120,7 @@ class MoodState:
         ambient = data.get("ambient_emotion", "")
         return cls(
             note_scope=str(data.get("note_scope") or "")[:64],
+            note_origin=str(data.get("note_origin") or ""),
             levels=levels,
             stimulated=stimulated,
             updated=finite_number(data.get("updated", 0)),
@@ -142,6 +144,7 @@ class MoodState:
     def as_dict(self) -> dict:
         return {
             "note_scope": self.note_scope,
+            "note_origin": self.note_origin,
             "levels": self.levels,
             "stimulated": self.stimulated,
             "updated": self.updated,

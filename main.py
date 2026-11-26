@@ -45,6 +45,7 @@ class AppraisalJob:
     time_context: dict | None = None
     return_context: dict | None = None
     observed_at: float = 0.0
+    conversation_generation: int = 0
 
 
 class ShortTermMoodPlugin(Star):
@@ -69,6 +70,7 @@ class ShortTermMoodPlugin(Star):
         self.dirty = False
         self.closing = False
         self.generation = 0
+        self.conversation_generations = {}
         self.retry_after = 0.0
 
     def companion_snapshot(self, origin=""):
@@ -82,7 +84,8 @@ class ShortTermMoodPlugin(Star):
             moment = self.clocks.sessions.get(conversation_key(origin))
             if moment:
                 previous = max(moment.get("last_user", 0), moment.get("last_reply", 0))
-                result["conversation_time"] = {"seconds_since_real_exchange": max(0, round(time.time() - previous))}
+                if previous:
+                    result["conversation_time"] = {"seconds_since_real_exchange": max(0, round(time.time() - previous))}
         return result
 
     def companion_observe(self, packet):
@@ -101,10 +104,25 @@ class ShortTermMoodPlugin(Star):
         job = self.snapshot(event, request)
         self.enqueue(replace(job, event_kind="shared_experience", experience=experience))
 
+    async def companion_clear(self, origin, *, persona):
+        key = conversation_key(origin)
+        self.conversation_generations[key] = self.conversation_generations.get(key, 0) + 1
+        self.clocks.sessions.pop(key, None)
+        self.clocks.moment(origin)["break_at"] = time.time()
+        state = self.state
+        if state.note_origin == key:
+            state.note_scope = state.note_origin = ""
+            state.inner_state = state.response_tendency = ""
+            state.feeling_history.clear()
+        await self.persist_state()
+        return "cleared"
+
     @filter.on_llm_response(priority=-100)
     async def finish_response(self, event: AstrMessageEvent, response):
         self.link.end(event, response)
+        generation = self.conversation_generations.get(conversation_key(event.unified_msg_origin), 0)
         if (event.get_extra(TIME_CONTEXT) and event_kind(event) == "dialogue"
+                and (event.get_extra("short_term_mood.clock_generation") or 0) == generation
                 and not getattr(response, "tools_call_args", None) and not event.get_extra("short_term_mood.clock_finished")):
             self.clocks.finish(event.unified_msg_origin, getattr(response, "completion_text", "") or "", time.time())
             event.set_extra("short_term_mood.clock_finished", True)
@@ -164,8 +182,11 @@ class ShortTermMoodPlugin(Star):
             previous = previous if isinstance(previous, (int, float)) and not any(task_history(item) for item in history) else 0
             fade = self.number("context_fade_minutes", 30, 1, 10080) * 60
             forget = self.number("context_set_aside_hours", 6, 0.01, 720) * 3600
-            data = self.clocks.prepare(event.unified_msg_origin, history, request.prompt or event.get_message_str(), time.time(), fade, forget, previous)
+            now = time.time()
+            data = self.clocks.prepare(event.unified_msg_origin, history, request.prompt or event.get_message_str(), now, fade, forget, previous)
             event.set_extra(TIME_CONTEXT, data)
+            generation = self.conversation_generations.get(conversation_key(event.unified_msg_origin), 0)
+            event.set_extra("short_term_mood.clock_generation", generation)
             if data["phase"] == "set_aside":
                 state = self.read_state()
                 if state.note_scope == self.snapshot(event, request).key:
@@ -334,6 +355,7 @@ class ShortTermMoodPlugin(Star):
             proactive=proactive,
             queued_at=time.monotonic(),
             observed_at=time.time(),
+            conversation_generation=self.conversation_generations.get(conversation_key(event.unified_msg_origin), 0),
             preferences=preferences,
             conversation_style=conversation_style,
             banter_level=banter_level,
@@ -353,12 +375,14 @@ class ShortTermMoodPlugin(Star):
             self.worker = asyncio.create_task(self.analyze_queue(), name="short-term-mood-analysis")
 
     def job_current(self, job: AppraisalJob) -> bool:
+        key = conversation_key(job.origin)
         return (
             job.generation == self.generation
+            and job.conversation_generation == self.conversation_generations.get(key, 0)
             and not self.closing
             and bool(self.config.get("enabled", True))
             and time.monotonic() - job.queued_at <= self.number("analysis_max_age_seconds", 120, 1, 3600)
-            and job.observed_at >= self.clocks.sessions.get(conversation_key(job.origin), {}).get("break_at", 0)
+            and job.observed_at >= self.clocks.sessions.get(key, {}).get("break_at", 0)
         )
 
     async def appraise(self, job: AppraisalJob):
@@ -366,7 +390,7 @@ class ShortTermMoodPlugin(Star):
         profiles = self.cached_profile(job.key)
         state = self.read_state()
         targets = profile_targets(state.levels, profiles)
-        notes = state.scoped_notes(job.key)
+        notes = self.notes_for(state, job)
         if job.time_context and job.time_context.get("phase") == "set_aside":
             notes = {"inner_state": "", "response_tendency": "", "feeling_history": []}
         payload = {
@@ -436,6 +460,7 @@ class ShortTermMoodPlugin(Star):
                 state.inner_state = state.response_tendency = ""
                 state.feeling_history.clear()
             state.note_scope = job.key
+            state.note_origin = conversation_key(job.origin)
             state.remember_feeling(result.inner_state, result.tendency)
         self.schedule_save()
         generated = result.profiles
@@ -445,7 +470,7 @@ class ShortTermMoodPlugin(Star):
             if len(self.profiles) > 100:
                 self.profiles.pop(min(self.profiles, key=lambda key: self.profiles[key][1]))
             async with self.persistence_lock:
-                if job.generation == self.generation:
+                if self.job_current(job):
                     await self.write_store(
                         self.store.save_profile, job.key, generated, created,
                         self.number("profile_cache_seconds", 604800, 60, 2592000),
@@ -457,7 +482,7 @@ class ShortTermMoodPlugin(Star):
             try:
                 await self.process_job(job)
             except Exception as error:
-                if job.generation == self.generation:
+                if self.job_current(job):
                     delay = self.number("analysis_retry_seconds", 30, 0, 3600)
                     self.retry_after = time.monotonic() + delay
                     logger.warning("Short-term mood background appraisal unavailable (%s), retrying after %ss", type(error).__name__, delay)
@@ -483,7 +508,7 @@ class ShortTermMoodPlugin(Star):
         if not isinstance(hint, str):
             state = self.read_state()
             job = self.snapshot(event, request)
-            notes = state.scoped_notes(job.key)
+            notes = self.notes_for(state, job)
             if job.time_context and job.time_context.get("phase") == "set_aside":
                 notes = {"inner_state": "", "response_tendency": "", "feeling_history": []}
             hint = build_hint(
@@ -504,6 +529,12 @@ class ShortTermMoodPlugin(Star):
             self.enqueue(job)
         if not any(isinstance(part, TextPart) and part.text.startswith(MARKER) for part in request.extra_user_content_parts):
             request.extra_user_content_parts.append(TextPart(text=hint).mark_as_temp())
+
+    def notes_for(self, state, job):
+        # Older data has only an opaque profile key. Suppress it after a
+        # conversation reset without attributing it to the wrong conversation.
+        boundary = self.clocks.sessions.get(conversation_key(job.origin), {}).get("break_at", 0)
+        return state.scoped_notes("" if boundary and not state.note_origin else job.key)
 
     @filter.command("mood")
     async def mood_status(self, event: AstrMessageEvent):

@@ -45,6 +45,26 @@ class FakeEvent:
 
 @unittest.skipUnless(SDK_AVAILABLE, "Requires AstrBot SDK for integration checks")
 class HookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_companion_cleanup_keeps_shared_mood_and_rejects_old_turn(self):
+        origin, other = "test:FriendMessage:a", "test:FriendMessage:b"
+        event = FakeEvent(origin)
+        request = ProviderRequest(prompt="previous")
+        await self.plugin.time_request(event, request)
+        old = self.plugin.snapshot(event, request)
+        self.plugin.clocks.human_activity(other, 123)
+        self.plugin.state.note_origin = origin
+        self.plugin.state.note_scope = old.key
+        self.plugin.state.inner_state = "old note"
+        self.plugin.state.levels = {"curiosity": 0.6}
+        self.assertEqual(await self.plugin.companion_clear(origin, persona="test"), "cleared")
+        await self.plugin.finish_response(event, SimpleNamespace(completion_text="previous reply"))
+        self.assertFalse(self.plugin.job_current(old))
+        self.assertNotIn("conversation_time", self.plugin.companion_snapshot(origin))
+        self.assertEqual(self.plugin.store.load_clocks()[other]["last_user"], 123)
+        state = self.plugin.store.load()
+        self.assertFalse(state.inner_state)
+        self.assertEqual(state.levels, {"curiosity": 0.6})
+
     async def test_overnight_clears_old_worded_notes_and_rejects_inflight_old_appraisal(self):
         event = FakeEvent("a", "早上好")
         request = ProviderRequest(prompt="早上好")
