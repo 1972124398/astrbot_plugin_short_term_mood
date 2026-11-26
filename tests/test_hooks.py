@@ -45,6 +45,29 @@ class FakeEvent:
 
 @unittest.skipUnless(SDK_AVAILABLE, "Requires AstrBot SDK for integration checks")
 class HookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_overnight_clears_old_worded_notes_and_rejects_inflight_old_appraisal(self):
+        event = FakeEvent("a", "早上好")
+        request = ProviderRequest(prompt="早上好")
+        self.plugin.clocks.human_activity("a", 1000)
+        self.plugin.state.note_scope = self.plugin.snapshot(event, request).key
+        self.plugin.state.levels = {"curiosity": 0.7}
+        self.plugin.state.inner_state = "旧的账还没追完"
+        self.plugin.state.response_tendency = "继续问昨天的问题"
+        self.plugin.state.feeling_history = [{"feeling": "旧刺激", "tendency": "催问"}]
+        old = replace(self.plugin.snapshot(event, request), observed_at=1001)
+        with patch("astrbot_plugin_short_term_mood.main.time.time", return_value=30000), patch.object(self.plugin, "enqueue"):
+            await self.plugin.apply_mood(event, request)
+        self.assertNotIn("旧的账", event.get_extra(EVENT_HINT))
+        self.assertEqual(self.plugin.state.inner_state, "")
+        self.assertEqual(self.plugin.state.levels, {"curiosity": 0.7})
+        self.assertFalse(self.plugin.job_current(old))
+        # The next message must not reintroduce the same notes while the new
+        # background assessment has not finished yet.
+        second = FakeEvent("a", "今天想聊点别的")
+        with patch("astrbot_plugin_short_term_mood.main.time.time", return_value=30001), patch.object(self.plugin, "enqueue"):
+            await self.plugin.apply_mood(second, ProviderRequest(prompt=second.message))
+        self.assertNotIn("昨天的问题", second.get_extra(EVENT_HINT))
+
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.persona = {"prompt": "你是语气温柔但有自己边界的角色。"}

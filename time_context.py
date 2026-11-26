@@ -47,7 +47,7 @@ class ConversationClocks:
         previous = max(moment.get("last_user", 0), moment.get("last_reply", 0)) or previous_at
         gap = max(0, now - previous) if previous else None
         dialogue = human_dialogue(history)
-        if gap is not None and gap >= forget_seconds and dialogue:
+        if gap is not None and gap >= forget_seconds:
             moment.update(break_at=now, old_tail=[fingerprint(item) for item in dialogue[-6:]], fresh=[])
         cutoff = self.boundary(moment, dialogue)
         moment["last_user"] = max(now, moment.get("last_user", 0))

@@ -166,6 +166,11 @@ class ShortTermMoodPlugin(Star):
             forget = self.number("context_set_aside_hours", 6, 0.01, 720) * 3600
             data = self.clocks.prepare(event.unified_msg_origin, history, request.prompt or event.get_message_str(), time.time(), fade, forget, previous)
             event.set_extra(TIME_CONTEXT, data)
+            if data["phase"] == "set_aside":
+                state = self.read_state()
+                if state.note_scope == self.snapshot(event, request).key:
+                    state.inner_state = state.response_tendency = ""
+                    state.feeling_history.clear()
             self.schedule_save()
         if data["phase"] in {"fading", "set_aside"} or data["fresh_segment_since"]:
             if not any(isinstance(part, TextPart) and part.text.startswith(TIME_MARKER) for part in request.extra_user_content_parts):
@@ -353,6 +358,7 @@ class ShortTermMoodPlugin(Star):
             and not self.closing
             and bool(self.config.get("enabled", True))
             and time.monotonic() - job.queued_at <= self.number("analysis_max_age_seconds", 120, 1, 3600)
+            and job.observed_at >= self.clocks.sessions.get(conversation_key(job.origin), {}).get("break_at", 0)
         )
 
     async def appraise(self, job: AppraisalJob):
@@ -361,6 +367,8 @@ class ShortTermMoodPlugin(Star):
         state = self.read_state()
         targets = profile_targets(state.levels, profiles)
         notes = state.scoped_notes(job.key)
+        if job.time_context and job.time_context.get("phase") == "set_aside":
+            notes = {"inner_state": "", "response_tendency": "", "feeling_history": []}
         payload = {
             "persona": job.persona,
             "current_mood": dict(state.levels),
@@ -476,6 +484,8 @@ class ShortTermMoodPlugin(Star):
             state = self.read_state()
             job = self.snapshot(event, request)
             notes = state.scoped_notes(job.key)
+            if job.time_context and job.time_context.get("phase") == "set_aside":
+                notes = {"inner_state": "", "response_tendency": "", "feeling_history": []}
             hint = build_hint(
                 state.levels, self.cached_profile(job.key),
                 bool(self.config.get("enable_refusal", True)) and (job.event_kind != "task_event" or self.can_decline_notice(event)),
