@@ -272,24 +272,22 @@ class MoodStore:
         row = self.connection.execute("SELECT payload FROM conversation_clocks WHERE id = 1").fetchone()
         return json.loads(row[0]) if row else {}
 
-    def save_clocks(self, clocks: dict) -> None:
-        with self.connection:
-            self.connection.execute(
-                "INSERT INTO conversation_clocks VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-                (json.dumps(clocks, ensure_ascii=False, allow_nan=False),),
-            )
-
     def load(self) -> MoodState:
         row = self.connection.execute("SELECT payload FROM agent_state WHERE id = 1").fetchone()
         return MoodState.from_dict(json.loads(row[0])) if row else MoodState()
 
-    def save(self, state: MoodState) -> None:
+    def save(self, state: MoodState, clocks: dict | None = None) -> None:
         with self.connection:
             self.connection.execute(
                 "INSERT INTO agent_state VALUES (1, ?) "
                 "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
                 (json.dumps(state.as_dict(), ensure_ascii=False, allow_nan=False),),
             )
+            if clocks is not None:
+                self.connection.execute(
+                    "INSERT INTO conversation_clocks VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                    (json.dumps(clocks, ensure_ascii=False, allow_nan=False),),
+                )
 
     def profile(self, key: str, now: float, cache_seconds: float = 7 * 86400) -> dict[str, str] | None:
         row = self.connection.execute(

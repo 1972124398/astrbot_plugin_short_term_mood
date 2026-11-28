@@ -2,6 +2,7 @@ import asyncio
 import copy
 import importlib.util
 import json
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -175,6 +176,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
         self.assertEqual(payload["sensitivity_preference"], 2)
         self.assertEqual(payload["emotional_inertia_preference"], 0.9)
+        self.assertLess(list(payload).index("emotional_inertia_preference"), list(payload).index("current_mood"))
 
     async def test_foreground_reads_never_recover_state_even_with_legacy_recovery_enabled(self):
         self.plugin.state = MoodState({"anger": 0.8}, {"anger": 1000}, updated=1000, last_interaction=1000)
@@ -673,11 +675,11 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         original_save = self.plugin.store.save
 
-        def slow_save(state):
+        def slow_save(state, *args):
             loop.call_soon_threadsafe(started.set)
             if not release.wait(timeout=2):
                 raise TimeoutError("Test did not release the storage thread")
-            original_save(state)
+            original_save(state, *args)
 
         with patch.object(self.plugin.store, "save", side_effect=slow_save):
             task = asyncio.create_task(self.plugin.persist_state())
@@ -692,6 +694,31 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await task
         self.assertFalse(self.plugin.persistence_lock.locked())
+
+    async def test_failed_clock_write_rolls_back_the_mood_snapshot(self):
+        store = self.plugin.store
+        origin = "test:FriendMessage:atomic"
+        self.plugin.state = MoodState(levels={"anger": 0.4}, stimulated={"anger": 100}, updated=100)
+        self.plugin.clocks.human_activity(origin, 100)
+        await self.plugin.persist_state()
+        previous_state = store.load().as_dict()
+        previous_clocks = store.load_clocks()
+        store.connection.execute(
+            "CREATE TRIGGER fail_clock_save BEFORE UPDATE ON conversation_clocks "
+            "BEGIN SELECT RAISE(ABORT, 'clock write failed'); END"
+        )
+        self.plugin.state = MoodState(levels={"joy": 0.6}, stimulated={"joy": 200}, updated=200)
+        self.plugin.clocks.human_activity(origin, 200)
+        try:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "clock write failed"):
+                await self.plugin.persist_state()
+            self.assertEqual(store.load().as_dict(), previous_state)
+            self.assertEqual(store.load_clocks(), previous_clocks)
+        finally:
+            store.connection.execute("DROP TRIGGER fail_clock_save")
+        await self.plugin.persist_state()
+        self.assertEqual(store.load().as_dict(), self.plugin.state.as_dict())
+        self.assertEqual(store.load_clocks(), self.plugin.clocks.sessions)
 
     async def test_queue_capacity_keeps_recent_interactions(self):
         started, release = asyncio.Event(), asyncio.Event()

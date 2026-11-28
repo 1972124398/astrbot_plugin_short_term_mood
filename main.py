@@ -251,8 +251,7 @@ class ShortTermMoodPlugin(Star):
         async with self.persistence_lock:
             snapshot = MoodState.from_dict(self.state.as_dict())
             clocks = copy.deepcopy(self.clocks.sessions)
-            await self.write_store(self.store.save, snapshot)
-            await self.write_store(self.store.save_clocks, clocks)
+            await self.write_store(self.store.save, snapshot, clocks)
 
     async def write_store(self, operation, *args):
         task = asyncio.create_task(asyncio.to_thread(operation, *args))
@@ -393,12 +392,9 @@ class ShortTermMoodPlugin(Star):
         notes = self.notes_for(state, job)
         if job.time_context and job.time_context.get("phase") == "set_aside":
             notes = {"inner_state": "", "response_tendency": "", "feeling_history": []}
+        # Put persona and preferences before the mood and dialogue that change per turn.
         payload = {
             "persona": job.persona,
-            "current_mood": dict(state.levels),
-            "ambient_emotion": state.ambient_emotion,
-            "previous_inner_state": notes["inner_state"],
-            "previous_response_tendency": notes["response_tendency"],
             "expression_preferences": job.preferences,
             "conversation_style": job.conversation_style,
             "banter_level": job.banter_level,
@@ -406,6 +402,10 @@ class ShortTermMoodPlugin(Star):
             "emotional_inertia_preference": self.number(
                 "emotion_inertia", 0.35, 0, 0.9
             ),
+            "current_mood": dict(state.levels),
+            "ambient_emotion": state.ambient_emotion,
+            "previous_inner_state": notes["inner_state"],
+            "previous_response_tendency": notes["response_tendency"],
             "feeling_history": notes["feeling_history"],
             "event_kind": job.event_kind,
             "shared_experience": job.experience,
